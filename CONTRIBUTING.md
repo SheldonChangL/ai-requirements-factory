@@ -47,6 +47,6 @@ npm run dev
 
 ## Adding a model adapter
 
-See [docs/model-adapters.md](/Users/sheldon.chang/Tools/ai-dev-ver2/docs/model-adapters.md).
+See [docs/model-adapters.md](docs/model-adapters.md).
 
-New adapters should be added through the registry in [backend/model_adapters.py](/Users/sheldon.chang/Tools/ai-dev-ver2/backend/model_adapters.py), not by adding more provider branching inside [backend/main.py](/Users/sheldon.chang/Tools/ai-dev-ver2/backend/main.py).
+New adapters should be added through the registry in [backend/model_adapters.py](backend/model_adapters.py), not by adding more provider branching inside [backend/main.py](backend/main.py).

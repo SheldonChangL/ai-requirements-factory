@@ -1,6 +1,6 @@
 # Model Adapter Contract
 
-Model adapters live in [backend/model_adapters.py](/Users/sheldon.chang/Tools/ai-dev-ver2/backend/model_adapters.py).
+Model adapters live in [backend/model_adapters.py](../backend/model_adapters.py).
 
 ## Contract
 

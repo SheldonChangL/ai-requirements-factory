@@ -12,6 +12,8 @@ This project turns rough product ideas and source documents into a structured de
 
 It is designed for teams that want local control, model flexibility, and a workflow they can customize instead of a closed SaaS product.
 
+![App Home](docs/images/app-home.png)
+
 ## Why this exists
 
 Most AI product-writing tools stop at "generate a PRD". This project is narrower and more operational:
@@ -148,8 +150,8 @@ See `frontend/.env.example`.
 
 ## Extending model backends
 
-Model providers are registered through [backend/model_adapters.py](/Users/sheldon.chang/Tools/ai-dev-ver2/backend/model_adapters.py).  
-The adapter contract is documented in [docs/model-adapters.md](/Users/sheldon.chang/Tools/ai-dev-ver2/docs/model-adapters.md).
+Model providers are registered through [backend/model_adapters.py](backend/model_adapters.py).  
+The adapter contract is documented in [docs/model-adapters.md](docs/model-adapters.md).
 
 ## Customizing prompts
 
@@ -191,7 +193,7 @@ Core endpoints:
 - `GET /api/models/check`
 
 `/api/export/{thread_id}` supports `format=markdown` and `format=json`.  
-The export and integration contract is documented in [docs/exports-and-integrations.md](/Users/sheldon.chang/Tools/ai-dev-ver2/docs/exports-and-integrations.md).
+The export and integration contract is documented in [docs/exports-and-integrations.md](docs/exports-and-integrations.md).
 
 ## Contributing
 
@@ -204,6 +206,14 @@ See `SECURITY.md`.
 ## Roadmap
 
 See `ROADMAP.md`.
+
+## Additional docs
+
+- [Architecture Guide](docs/architecture.md)
+- [Export and Integration Contract](docs/exports-and-integrations.md)
+- [Model Adapter Contract](docs/model-adapters.md)
+- [Hosted Boundary](docs/hosted-boundary.md)
+- [Examples](examples/README.md)
 
 ## License
 
