@@ -243,7 +243,7 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
         const msg = typeof err.detail === "string" ? err.detail : `HTTP ${res.status}`;
         setTestResult({ ok: false, message: msg });
       } else {
-        const list = await res.json();
+        const { projects: list } = await res.json();
         setProjects(list);
         setTestResult({ ok: true, message: `Connected — ${list.length} project(s) found` });
       }

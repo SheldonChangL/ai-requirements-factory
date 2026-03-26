@@ -1157,7 +1157,7 @@ export default function HomePage() {
         });
         const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
         if (res.ok) {
-          const list = await res.json();
+          const { projects: list } = await res.json();
           setJiraProjects(list);
           if (list.length > 0) {
             setSelectedJiraProjectKey(list[0].key);
@@ -2353,7 +2353,7 @@ export default function HomePage() {
                         const params = new URLSearchParams({ domain: jiraConfig.domain, email: jiraConfig.email, token: jiraToken });
                         const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
                         if (res.ok) {
-                          const list = await res.json();
+                          const { projects: list } = await res.json();
                           setJiraProjects(list);
                           if (!selectedJiraProjectKey && list.length > 0) setSelectedJiraProjectKey(list[0].key);
                         } else {
