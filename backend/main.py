@@ -22,9 +22,12 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
-# ---------------------------------------------------------------------------
-# System Analyst prompt
-# ---------------------------------------------------------------------------
+from prompts import (
+    build_architect_prompt,
+    build_sa_prompt,
+    build_story_parse_prompt,
+    build_user_stories_prompt,
+)
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
@@ -33,72 +36,6 @@ CORS_ALLOW_ORIGINS = [
     for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
     if origin.strip()
 ]
-
-SA_SYSTEM_PROMPT = """You are a strict and meticulous System Analyst (SA) at a professional software factory.
-
-Your ONLY job is to transform raw, often vague user requirements into a comprehensive, unambiguous Product Requirements Document (PRD).
-
-## Rules you must follow:
-0. LANGUAGE RULE: You MUST always respond in the same language the user writes in. If the user writes in Chinese (Traditional or Simplified), respond entirely in Chinese. If in English, respond in English. Never switch languages unless the user does first.
-1. NEVER make assumptions about requirements. If anything is unclear, ask precise, numbered clarifying questions.
-2. You MUST probe for Non-Functional Requirements (NFRs) including:
-   - Security (authentication, authorization, data privacy)
-   - Scalability & Concurrency (expected load, peak users)
-   - Performance (response time SLAs)
-   - Availability & Reliability (uptime requirements)
-   - Data Retention & Compliance (GDPR, HIPAA, etc.)
-3. If the user's input is vague or missing any of these NFR areas, you MUST ask about them before writing the PRD.
-4. Only when ALL requirements (functional + non-functional) are crystal clear and complete, generate the PRD.
-
-## CRITICAL — Questionnaire Format Rule:
-If you find that there are 2 or more technical details or Non-Functional Requirements (NFRs) that the user needs to clarify, DO NOT ask them as a plain text list. Instead, you MUST output a JSON formatted questionnaire wrapped exactly in a fenced code block with the language tag `json-questionnaire`, like this:
-
-```json-questionnaire
-{
-  "title": "Requirements Clarification",
-  "questions": [
-    { "id": "q1", "category": "Security", "question": "What authentication method should be used?" },
-    { "id": "q2", "category": "Performance", "question": "What is the expected concurrent user load?" }
-  ]
-}
-```
-
-Only use plain text questions when there is exactly 1 question to ask. For 2 or more questions, always use the `json-questionnaire` block — never a plain numbered list.
-
-## PRD Format (use ONLY when requirements are complete):
-# Product Requirements Document
-
-## 1. Overview
-[Brief description of the product]
-
-## 2. Goals & Objectives
-[Bulleted list of goals]
-
-## 3. Functional Requirements
-### 3.1 [Feature Name]
-- [Detailed requirement]
-
-## 4. Non-Functional Requirements
-### 4.1 Security
-- [Specific security requirements]
-### 4.2 Performance
-- [Specific performance SLAs]
-### 4.3 Scalability & Concurrency
-- [Specific scalability requirements]
-### 4.4 Availability & Reliability
-- [Uptime SLA, disaster recovery]
-### 4.5 Compliance & Data Retention
-- [Regulatory requirements]
-
-## 5. Out of Scope
-[What is explicitly NOT included]
-
-## 6. Open Questions
-[Any remaining ambiguities, if none write "None"]
-
-[PRD_READY]
-
-CRITICAL: Append `[PRD_READY]` at the very end ONLY when the PRD is complete and all requirements are clarified. Do NOT append it during clarification questions."""
 
 
 # ---------------------------------------------------------------------------
@@ -266,25 +203,10 @@ def sa_interaction_node(state: SAState) -> SAState:
 
     conversation_text = "\n".join(history_lines)
 
-    # Feature B — Amendment Mode: inject existing PRD so the agent can merge changes
-    if already_ready and existing_prd.strip():
-        amendment_prefix = (
-            "AMENDMENT MODE: A PRD already exists. The user wants to add or modify requirements.\n"
-            "Your job is to understand the requested changes, ask clarifying questions if needed "
-            "(using the json-questionnaire format for 2+ questions), then output the COMPLETE updated PRD "
-            "incorporating both original and new requirements. Append [PRD_READY] when the updated PRD is complete.\n\n"
-            f"Current PRD:\n{existing_prd}\n\n"
-        )
-        effective_system_prompt = amendment_prefix + SA_SYSTEM_PROMPT
-    else:
-        effective_system_prompt = SA_SYSTEM_PROMPT
-
-    full_prompt = (
-        f"{effective_system_prompt}\n\n"
-        "--- Conversation so far ---\n"
-        f"{conversation_text}\n"
-        "--- End of conversation ---\n\n"
-        "SA Agent:"
+    full_prompt = build_sa_prompt(
+        conversation_text=conversation_text,
+        existing_prd=existing_prd,
+        already_ready=already_ready,
     )
 
     try:
@@ -530,17 +452,7 @@ async def generate_architecture(request: GenerateArchitectureRequest):
     if not prd_draft:
         raise HTTPException(status_code=400, detail="PRD is not ready yet.")
 
-    # Build architect prompt — language rule prepended so the response matches the PRD language
-    architect_prompt = (
-        "LANGUAGE RULE: You MUST respond in the same language as the PRD content. "
-        "If the PRD is in Chinese (Traditional or Simplified), your entire response must be in Chinese. "
-        "If the PRD is in English, respond in English.\n\n"
-        "You are a Staff Software Architect. Based on the following PRD, provide a "
-        "Technical Evaluation, Tech Stack selection, and System Architecture. "
-        "YOU MUST include at least one system architecture diagram using standard "
-        "mermaid syntax wrapped in markdown code blocks with the language set to mermaid.\n\n"
-        f"PRD:\n{prd_draft}"
-    )
+    architect_prompt = build_architect_prompt(prd_draft)
 
     # Invoke the model (runs in a thread to avoid blocking the event loop)
     try:
@@ -652,23 +564,9 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
 
     prd_draft = state_snapshot.values.get("prd_draft", "").strip()
 
-    # Build user story agent prompt
-    user_stories_prompt = (
-        "LANGUAGE RULE: You MUST respond in the same language as the PRD and Architecture content. "
-        "If the content is in Chinese (Traditional or Simplified), your entire response must be in Chinese. "
-        "If the content is in English, respond in English.\n\n"
-        "You are a Senior Product Manager and Agile Coach. Based on the following PRD and System Architecture, "
-        "produce a complete set of User Stories organized by Epic.\n\n"
-        "## Output Format Requirements:\n"
-        "- Group stories under clearly labeled Epics (e.g., ## Epic 1: User Authentication)\n"
-        "- Each story must follow the format: **As a [role], I want [goal] so that [benefit]**\n"
-        "- Each story must include:\n"
-        "  - **Acceptance Criteria** (bulleted list of testable conditions)\n"
-        "  - **Story Points** (Fibonacci: 1, 2, 3, 5, 8, 13 — estimate complexity)\n"
-        "- Cover all functional requirements from the PRD\n"
-        "- Include edge cases and error handling stories where relevant\n\n"
-        f"PRD:\n{prd_draft}\n\n"
-        f"System Architecture:\n{architecture_draft}"
+    user_stories_prompt = build_user_stories_prompt(
+        prd_draft=prd_draft,
+        architecture_draft=architecture_draft,
     )
 
     # Invoke the model in a thread to avoid blocking the event loop
@@ -748,16 +646,7 @@ async def push_to_jira(request: PushToJiraRequest):
             detail="User stories must be generated before pushing to Jira.",
         )
 
-    # Step 1: Use the AI model to parse the Markdown user stories into structured JSON
-    parse_prompt = (
-        "Parse the following User Stories Markdown into a JSON array. Each item must have:\n"
-        '- "summary": short title (max 80 chars) suitable for a Jira issue title\n'
-        '- "description": full story text including acceptance criteria in plain text\n'
-        '- "story_points": integer (the estimated story points)\n'
-        '- "epic": the Epic/Feature group name\n\n'
-        "Return ONLY a valid JSON array with no markdown wrapper, no explanation, no code fences.\n\n"
-        f"User Stories:\n{user_stories_draft}"
-    )
+    parse_prompt = build_story_parse_prompt(user_stories_draft)
 
     try:
         raw_json = await asyncio.to_thread(model_adapter, model_choice, parse_prompt)

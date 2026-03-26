@@ -120,6 +120,8 @@ See `backend/.env.example`.
 - `OLLAMA_HOST`: Ollama base URL
 - `OLLAMA_MODEL`: default Ollama model name
 - `CORS_ALLOW_ORIGINS`: comma-separated list of allowed origins
+- `PROMPT_PROFILE`: prompt profile name under `backend/prompt_profiles/`
+- `PROMPT_PROFILE_DIR`: optional absolute path to a custom prompt directory
 
 ### Frontend environment variables
 
@@ -142,6 +144,30 @@ See `frontend/.env.example`.
 - Gemini CLI
 - Claude CLI
 - Codex CLI
+
+## Customizing prompts
+
+Prompt templates are file-based and live under `backend/prompt_profiles/`.
+
+The default profile is:
+
+```text
+backend/prompt_profiles/default/
+├── sa_system.md
+├── sa_amendment_prefix.md
+├── sa_chat.md
+├── architect.md
+├── user_stories.md
+└── story_parse.md
+```
+
+To customize prompts:
+
+1. Copy `backend/prompt_profiles/default` to a new folder such as `backend/prompt_profiles/enterprise`.
+2. Edit the Markdown files in that profile.
+3. Set `PROMPT_PROFILE=enterprise` before starting the backend.
+
+If you want prompts outside the repo, set `PROMPT_PROFILE_DIR` to a directory containing the same files.
 
 ## Public API
 

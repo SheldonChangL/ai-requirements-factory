@@ -15,7 +15,8 @@ This file tracks the work needed to turn this repo into a publishable, adoptable
 
 ## Product Hardening
 
-- [ ] Extract prompts and templates from the main backend module.
+- [x] Extract prompts and templates from the main backend module.
+- [x] Make prompts file-based and profile-selectable for non-developers.
 - [ ] Define a documented model adapter contract for new providers.
 - [ ] Define a documented export and integration contract.
 - [ ] Add an OpenAI-compatible adapter to reduce adoption friction.
