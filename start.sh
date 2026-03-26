@@ -39,6 +39,28 @@ kill_port() {
   fi
 }
 
+wait_for_url() {
+  local url="$1"
+  local name="$2"
+  local pid="$3"
+  local attempts="${4:-30}"
+
+  for _ in $(seq 1 "$attempts"); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      info "$name is responding at $url"
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      error "$name process exited before becoming ready."
+      return 1
+    fi
+    sleep 1
+  done
+
+  error "$name did not become ready at $url in time."
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Pre-flight: force-clear ports 8000 and 3000
 # ---------------------------------------------------------------------------
@@ -120,15 +142,22 @@ section "Starting Backend (FastAPI on :8000)"
 truncate -s 0 "$BACKEND_LOG"
 
 cd "$BACKEND_DIR"
-"$PYTHON_BIN" -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload \
-  > "$BACKEND_LOG" 2>&1 &
+nohup "$PYTHON_BIN" -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload \
+  < /dev/null > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
+disown "$BACKEND_PID" 2>/dev/null || true
 cd "$SCRIPT_DIR"
 
 if kill -0 "$BACKEND_PID" 2>/dev/null; then
   info "Backend started  (PID $BACKEND_PID) → log: backend.log"
 else
   error "Backend failed to start. Check backend.log for details."
+  exit 1
+fi
+
+if ! wait_for_url "http://localhost:8000/health" "Backend" "$BACKEND_PID"; then
+  error "Backend failed readiness check. Check backend.log for details."
+  kill "$BACKEND_PID" 2>/dev/null || true
   exit 1
 fi
 
@@ -159,15 +188,23 @@ section "Starting Frontend (Next.js on :3000)"
 truncate -s 0 "$FRONTEND_LOG"
 
 cd "$FRONTEND_DIR"
-npm run dev \
-  > "$FRONTEND_LOG" 2>&1 &
+nohup npm run dev \
+  < /dev/null > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
+disown "$FRONTEND_PID" 2>/dev/null || true
 cd "$SCRIPT_DIR"
 
 if kill -0 "$FRONTEND_PID" 2>/dev/null; then
   info "Frontend started (PID $FRONTEND_PID) → log: frontend.log"
 else
   error "Frontend failed to start. Check frontend.log for details."
+  kill "$BACKEND_PID" 2>/dev/null || true
+  exit 1
+fi
+
+if ! wait_for_url "http://localhost:3000" "Frontend" "$FRONTEND_PID"; then
+  error "Frontend failed readiness check. Check frontend.log for details."
+  kill "$FRONTEND_PID" 2>/dev/null || true
   kill "$BACKEND_PID" 2>/dev/null || true
   exit 1
 fi
