@@ -208,7 +208,7 @@ function IntegrationCard({
 // ---------------------------------------------------------------------------
 
 function JiraPanel({ onSaved }: { onSaved: () => void }) {
-  const [cfg, setCfg]             = useState<JiraConfig>({ domain: "", email: "", projectKey: "" });
+  const [cfg, setCfg]             = useState<JiraConfig>({ domain: "", email: "" });
   const [token, setToken]         = useState("");
   const [showToken, setShowToken] = useState(false);
   const [saved, setSaved]         = useState(false);
@@ -245,10 +245,7 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
       } else {
         const list = await res.json();
         setProjects(list);
-        setTestResult({ ok: true, message: `Connected — ${list.length} project(s) available` });
-        if (list.length > 0 && !cfg.projectKey) {
-          setCfg((c) => ({ ...c, projectKey: list[0].key }));
-        }
+        setTestResult({ ok: true, message: `Connected — ${list.length} project(s) found` });
       }
     } catch (e: unknown) {
       setTestResult({ ok: false, message: e instanceof Error ? e.message : "Connection failed" });
@@ -304,29 +301,16 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
         </div>
       )}
 
-      <Field label="Project Key" hint={projects.length > 0 ? `(${projects.length} loaded)` : undefined}>
-        {projects.length > 0 ? (
-          <div className="relative">
-            <select value={cfg.projectKey}
-              onChange={(e) => setCfg((c) => ({ ...c, projectKey: e.target.value }))}
-              className={`${inputCls} appearance-none pr-8 cursor-pointer`}>
-              <option value="" disabled>Select a project…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.key}>{p.name} ({p.key})</option>
-              ))}
-            </select>
-            <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
-              <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+      {projects.length > 0 && (
+        <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/50 divide-y divide-zinc-800 max-h-40 overflow-y-auto">
+          {projects.map((p) => (
+            <div key={p.id} className="flex items-center gap-2 px-3 py-2">
+              <span className="font-mono text-xs text-zinc-400 shrink-0 w-16 truncate">{p.key}</span>
+              <span className="text-xs text-zinc-300 truncate">{p.name}</span>
             </div>
-          </div>
-        ) : (
-          <input type="text" value={cfg.projectKey}
-            onChange={(e) => setCfg((c) => ({ ...c, projectKey: e.target.value.toUpperCase() }))}
-            placeholder="e.g. PROJ" className={`${inputCls} font-mono`} />
-        )}
-      </Field>
+          ))}
+        </div>
+      )}
 
       <div className="flex justify-end pt-1">
         <button type="button" onClick={handleSave}

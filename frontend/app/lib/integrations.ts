@@ -87,7 +87,7 @@ const DEFAULT_JIRA_DOMAIN =
 export interface JiraConfig {
   domain: string;
   email: string;
-  projectKey: string; // default project; can be overridden at publish time
+  projectKey?: string; // legacy — project is now selected at publish time via API
 }
 
 const JIRA_CONFIG_KEY = "jira-config";
@@ -95,13 +95,13 @@ const JIRA_TOKEN_KEY  = "jira-token-enc";
 
 export function loadJiraConfig(): JiraConfig {
   if (typeof window === "undefined")
-    return { domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" };
+    return { domain: DEFAULT_JIRA_DOMAIN, email: "" };
   try {
     const raw = localStorage.getItem(JIRA_CONFIG_KEY);
-    if (!raw) return { domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" };
+    if (!raw) return { domain: DEFAULT_JIRA_DOMAIN, email: "" };
     return { domain: DEFAULT_JIRA_DOMAIN, ...JSON.parse(raw) } as JiraConfig;
   } catch {
-    return { domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" };
+    return { domain: DEFAULT_JIRA_DOMAIN, email: "" };
   }
 }
 

@@ -1144,7 +1144,7 @@ export default function HomePage() {
     ]);
     setJiraToken(freshJiraToken);
     setGitHubToken(freshGithubToken);
-    setSelectedJiraProjectKey(freshJiraCfg.projectKey ?? "");
+    setSelectedJiraProjectKey("");
 
     // Auto-fetch Jira projects if opening for Jira and credentials are ready
     if (target === "jira" && freshJiraCfg.domain && freshJiraCfg.email && freshJiraToken) {
@@ -1159,7 +1159,7 @@ export default function HomePage() {
         if (res.ok) {
           const list = await res.json();
           setJiraProjects(list);
-          if (!freshJiraCfg.projectKey && list.length > 0) {
+          if (list.length > 0) {
             setSelectedJiraProjectKey(list[0].key);
           }
         } else {
@@ -1191,7 +1191,7 @@ export default function HomePage() {
           jira_domain: jiraConfig.domain,
           jira_email: jiraConfig.email,
           jira_token: jiraToken,
-          jira_project_key: selectedJiraProjectKey || jiraConfig.projectKey,
+          jira_project_key: selectedJiraProjectKey,
           github_owner: githubConfig.owner,
           github_repo: githubConfig.repo,
           github_token: githubToken,
