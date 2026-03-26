@@ -645,6 +645,7 @@ export default function HomePage() {
   const [jiraProjects, setJiraProjects]           = useState<{ key: string; name: string; id: string }[]>([]);
   const [selectedJiraProjectKey, setSelectedJiraProjectKey] = useState("");
   const [isLoadingJiraProjects, setIsLoadingJiraProjects] = useState(false);
+  const [jiraProjectsFetchFailed, setJiraProjectsFetchFailed] = useState(false);
 
   // ── Amendment Mode banner ─────────────────────────────────────────────────
   const [amendmentBannerDismissed, setAmendmentBannerDismissed] = useState(false);
@@ -1130,6 +1131,7 @@ export default function HomePage() {
     setShowDeliveryModal(true);
     setDeliveryErrorMsg(null);
     setJiraProjects([]);
+    setJiraProjectsFetchFailed(false);
     // Reload config from storage each time the modal opens so it picks up any
     // changes the user may have saved in the Settings page mid-session.
     const freshJiraCfg = loadJiraConfig();
@@ -1160,9 +1162,11 @@ export default function HomePage() {
           if (!freshJiraCfg.projectKey && list.length > 0) {
             setSelectedJiraProjectKey(list[0].key);
           }
+        } else {
+          setJiraProjectsFetchFailed(true);
         }
       } catch {
-        // silently ignore — user can still publish with saved projectKey
+        setJiraProjectsFetchFailed(true);
       } finally {
         setIsLoadingJiraProjects(false);
       }
@@ -2344,6 +2348,7 @@ export default function HomePage() {
                     // Auto-fetch projects if not loaded yet
                     if (jiraProjects.length === 0 && isJiraConfigured() && jiraToken) {
                       setIsLoadingJiraProjects(true);
+                      setJiraProjectsFetchFailed(false);
                       try {
                         const params = new URLSearchParams({ domain: jiraConfig.domain, email: jiraConfig.email, token: jiraToken });
                         const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
@@ -2351,8 +2356,10 @@ export default function HomePage() {
                           const list = await res.json();
                           setJiraProjects(list);
                           if (!selectedJiraProjectKey && list.length > 0) setSelectedJiraProjectKey(list[0].key);
+                        } else {
+                          setJiraProjectsFetchFailed(true);
                         }
-                      } catch { /* ignore */ } finally {
+                      } catch { setJiraProjectsFetchFailed(true); } finally {
                         setIsLoadingJiraProjects(false);
                       }
                     }
@@ -2383,13 +2390,13 @@ export default function HomePage() {
                     </div>
                     {/* Project selector */}
                     <div>
-                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                        Project
-                        {isLoadingJiraProjects && (
-                          <span className="ml-2 font-normal text-zinc-600">loading…</span>
-                        )}
-                      </label>
-                      {jiraProjects.length > 0 ? (
+                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Project</label>
+                      {isLoadingJiraProjects ? (
+                        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-700 bg-zinc-900">
+                          <Spinner className="w-3.5 h-3.5 text-zinc-500" />
+                          <span className="text-xs text-zinc-500">Loading projects…</span>
+                        </div>
+                      ) : jiraProjects.length > 0 ? (
                         <div className="relative">
                           <select
                             value={selectedJiraProjectKey}
@@ -2408,13 +2415,25 @@ export default function HomePage() {
                           </div>
                         </div>
                       ) : (
-                        <input
-                          type="text"
-                          value={selectedJiraProjectKey}
-                          onChange={(e) => setSelectedJiraProjectKey(e.target.value.toUpperCase())}
-                          placeholder={jiraConfig.projectKey || "e.g. PROJ"}
-                          className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
+                        <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 flex items-start gap-2.5">
+                          <svg className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-amber-300 font-medium">
+                              {jiraProjectsFetchFailed ? "Could not load projects" : "No projects loaded"}
+                            </p>
+                            <p className="text-xs text-zinc-500 mt-0.5">
+                              Go to{" "}
+                              <Link href="/settings" onClick={() => setShowDeliveryModal(false)}
+                                className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
+                                Settings
+                              </Link>
+                              {" "}and use <span className="font-semibold text-zinc-400">Test</span> to verify your credentials.
+                            </p>
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2488,7 +2507,12 @@ export default function HomePage() {
                 onClick={handlePublishDelivery}
                 disabled={
                   isPublishingDelivery ||
-                  (deliveryTarget === "jira" && (!isJiraConfigured() || !(selectedJiraProjectKey || jiraConfig.projectKey))) ||
+                  (deliveryTarget === "jira" && (
+                    !isJiraConfigured() ||
+                    isLoadingJiraProjects ||
+                    jiraProjects.length === 0 ||
+                    !selectedJiraProjectKey
+                  )) ||
                   (deliveryTarget === "github" && !isGitHubConfigured())
                 }
                 className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"
