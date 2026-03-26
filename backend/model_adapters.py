@@ -10,8 +10,10 @@ Adapter contract:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable
@@ -20,6 +22,9 @@ from langchain_ollama import ChatOllama
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+OPENAI_COMPAT_BASE_URL = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+OPENAI_COMPAT_API_KEY = os.getenv("OPENAI_COMPAT_API_KEY", "").strip()
+OPENAI_COMPAT_MODEL = os.getenv("OPENAI_COMPAT_MODEL", "").strip()
 
 
 @dataclass(frozen=True)
@@ -87,6 +92,85 @@ def _check_cli(command: str) -> bool:
         return False
 
 
+def _openai_compat_headers() -> dict[str, str]:
+    if not OPENAI_COMPAT_API_KEY:
+        raise RuntimeError("OPENAI_COMPAT_API_KEY is not set.")
+    return {
+        "Authorization": f"Bearer {OPENAI_COMPAT_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _extract_openai_compat_content(payload: dict) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("OpenAI-compatible API returned no choices.")
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                if isinstance(text, str):
+                    text_parts.append(text)
+        joined = "".join(text_parts).strip()
+        if joined:
+            return joined
+    raise RuntimeError("OpenAI-compatible API returned unsupported message content.")
+
+
+def _invoke_openai_compatible(prompt: str) -> str:
+    if not OPENAI_COMPAT_MODEL:
+        raise RuntimeError("OPENAI_COMPAT_MODEL is not set.")
+
+    payload = {
+        "model": OPENAI_COMPAT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+    }
+    request = urllib.request.Request(
+        f"{OPENAI_COMPAT_BASE_URL}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_openai_compat_headers(),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            body = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"OpenAI-compatible API error (HTTP {exc.code}): {error_body}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Could not reach OpenAI-compatible API at '{OPENAI_COMPAT_BASE_URL}': {exc.reason}"
+        ) from exc
+
+    output = _extract_openai_compat_content(body)
+    if not output:
+        raise RuntimeError("OpenAI-compatible API returned empty output.")
+    return output
+
+
+def _check_openai_compatible() -> bool:
+    if not OPENAI_COMPAT_API_KEY:
+        return False
+    request = urllib.request.Request(
+        f"{OPENAI_COMPAT_BASE_URL}/models",
+        headers=_openai_compat_headers(),
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
 MODEL_ADAPTERS: dict[str, ModelAdapter] = {
     "ollama": ModelAdapter(
         model_choice="ollama",
@@ -111,6 +195,12 @@ MODEL_ADAPTERS: dict[str, ModelAdapter] = {
         invoke=lambda prompt: _invoke_cli(prompt, "codex", "codex CLI"),
         is_available=lambda: _check_cli("codex"),
         description="Codex CLI subprocess adapter",
+    ),
+    "openai-compatible": ModelAdapter(
+        model_choice="openai-compatible",
+        invoke=_invoke_openai_compatible,
+        is_available=_check_openai_compatible,
+        description="OpenAI-compatible chat completions adapter",
     ),
 }
 

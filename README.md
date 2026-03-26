@@ -144,6 +144,7 @@ See `frontend/.env.example`.
 - Gemini CLI
 - Claude CLI
 - Codex CLI
+- OpenAI-compatible APIs
 
 ## Extending model backends
 

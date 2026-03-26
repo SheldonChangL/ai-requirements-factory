@@ -19,7 +19,7 @@ This file tracks the work needed to turn this repo into a publishable, adoptable
 - [x] Make prompts file-based and profile-selectable for non-developers.
 - [x] Define a documented model adapter contract for new providers.
 - [ ] Define a documented export and integration contract.
-- [ ] Add an OpenAI-compatible adapter to reduce adoption friction.
+- [x] Add an OpenAI-compatible adapter to reduce adoption friction.
 - [ ] Improve error categories for model, parsing, and Jira failures.
 - [ ] Add sample input files and one demo project scenario.
 
