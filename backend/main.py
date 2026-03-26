@@ -13,13 +13,14 @@ import openpyxl
 from docx import Document as DocxDocument
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
+from api_errors import error_detail
 from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
 from prompts import (
     build_architect_prompt,
@@ -172,17 +173,24 @@ class ChatResponse(BaseModel):
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     if not request.user_input.strip():
-        raise HTTPException(status_code=400, detail="user_input cannot be empty.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "user_input cannot be empty."),
+        )
     if not request.thread_id.strip():
-        raise HTTPException(status_code=400, detail="thread_id cannot be empty.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "thread_id cannot be empty."),
+        )
 
     model_choice = request.model_choice.strip().lower()
     if model_choice not in VALID_MODEL_CHOICES:
         raise HTTPException(
             status_code=400,
-            detail=(
+            detail=error_detail(
+                "invalid_model_choice",
                 f"Invalid model_choice '{model_choice}'. "
-                f"Valid options: {sorted(VALID_MODEL_CHOICES)}"
+                f"Valid options: {sorted(VALID_MODEL_CHOICES)}",
             ),
         )
 
@@ -201,12 +209,16 @@ async def chat(request: ChatRequest):
         result = graph.invoke(input_state, config=config)
     except Exception as exc:
         raise HTTPException(
-            status_code=500, detail=f"LangGraph invocation failed: {exc}"
+            status_code=500,
+            detail=error_detail("workflow_error", f"LangGraph invocation failed: {exc}"),
         )
 
     ai_messages = [m for m in result["messages"] if isinstance(m, AIMessage)]
     if not ai_messages:
-        raise HTTPException(status_code=500, detail="No AI response was generated.")
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("model_error", "No AI response was generated."),
+        )
 
     latest_response = ai_messages[-1].content
 
@@ -240,7 +252,7 @@ async def get_thread_state(thread_id: str):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to retrieve thread state: {exc}",
+            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
         )
 
     # No checkpoint exists yet for this thread
@@ -287,7 +299,7 @@ async def delete_thread(thread_id: str):
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to delete thread '{thread_id}': {exc}",
+            detail=error_detail("state_error", f"Failed to delete thread '{thread_id}': {exc}"),
         )
     return DeleteThreadResponse(success=True, thread_id=thread_id)
 
@@ -315,9 +327,10 @@ async def generate_architecture(request: GenerateArchitectureRequest):
     if model_choice not in VALID_MODEL_CHOICES:
         raise HTTPException(
             status_code=400,
-            detail=(
+            detail=error_detail(
+                "invalid_model_choice",
                 f"Invalid model_choice '{model_choice}'. "
-                f"Valid options: {sorted(VALID_MODEL_CHOICES)}"
+                f"Valid options: {sorted(VALID_MODEL_CHOICES)}",
             ),
         )
 
@@ -329,15 +342,21 @@ async def generate_architecture(request: GenerateArchitectureRequest):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to retrieve thread state: {exc}",
+            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
         )
 
     if state_snapshot is None or not state_snapshot.values:
-        raise HTTPException(status_code=400, detail="PRD is not ready yet.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("missing_prd", "PRD is not ready yet."),
+        )
 
     prd_draft = state_snapshot.values.get("prd_draft", "").strip()
     if not prd_draft:
-        raise HTTPException(status_code=400, detail="PRD is not ready yet.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("missing_prd", "PRD is not ready yet."),
+        )
 
     architect_prompt = build_architect_prompt(prd_draft)
 
@@ -347,7 +366,7 @@ async def generate_architecture(request: GenerateArchitectureRequest):
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Architect agent failed: {exc}",
+            detail=error_detail("model_error", f"Architect agent failed: {exc}"),
         )
 
     # Persist the architecture draft back into the graph state
@@ -356,7 +375,7 @@ async def generate_architecture(request: GenerateArchitectureRequest):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to persist architecture draft: {exc}",
+            detail=error_detail("state_error", f"Failed to persist architecture draft: {exc}"),
         )
 
     return GenerateArchitectureResponse(architecture_draft=result)
@@ -393,7 +412,10 @@ async def update_architecture(thread_id: str, request: UpdateArchitectureRequest
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to persist architecture for thread '{thread_id}': {exc}",
+            detail=error_detail(
+                "state_error",
+                f"Failed to persist architecture for thread '{thread_id}': {exc}",
+            ),
         )
     return UpdateArchitectureResponse(success=True, architecture_draft=request.content)
 
@@ -422,9 +444,10 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
     if model_choice not in VALID_MODEL_CHOICES:
         raise HTTPException(
             status_code=400,
-            detail=(
+            detail=error_detail(
+                "invalid_model_choice",
                 f"Invalid model_choice '{model_choice}'. "
-                f"Valid options: {sorted(VALID_MODEL_CHOICES)}"
+                f"Valid options: {sorted(VALID_MODEL_CHOICES)}",
             ),
         )
 
@@ -436,17 +459,23 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to retrieve thread state: {exc}",
+            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
         )
 
     if state_snapshot is None or not state_snapshot.values:
-        raise HTTPException(status_code=400, detail="Architecture is not ready yet.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("missing_architecture", "Architecture is not ready yet."),
+        )
 
     architecture_draft = state_snapshot.values.get("architecture_draft", "").strip()
     if not architecture_draft:
         raise HTTPException(
             status_code=400,
-            detail="Architecture must be generated before creating user stories.",
+            detail=error_detail(
+                "missing_architecture",
+                "Architecture must be generated before creating user stories.",
+            ),
         )
 
     prd_draft = state_snapshot.values.get("prd_draft", "").strip()
@@ -462,7 +491,7 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"User Story agent failed: {exc}",
+            detail=error_detail("model_error", f"User Story agent failed: {exc}"),
         )
 
     # Persist the user stories draft back into the graph state
@@ -471,7 +500,7 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to persist user stories draft: {exc}",
+            detail=error_detail("state_error", f"Failed to persist user stories draft: {exc}"),
         )
 
     return GenerateUserStoriesResponse(user_stories_draft=result)
@@ -506,9 +535,10 @@ async def push_to_jira(request: PushToJiraRequest):
     if model_choice not in VALID_MODEL_CHOICES:
         raise HTTPException(
             status_code=400,
-            detail=(
+            detail=error_detail(
+                "invalid_model_choice",
                 f"Invalid model_choice '{model_choice}'. "
-                f"Valid options: {sorted(VALID_MODEL_CHOICES)}"
+                f"Valid options: {sorted(VALID_MODEL_CHOICES)}",
             ),
         )
 
@@ -520,17 +550,23 @@ async def push_to_jira(request: PushToJiraRequest):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to retrieve thread state: {exc}",
+            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
         )
 
     if state_snapshot is None or not state_snapshot.values:
-        raise HTTPException(status_code=400, detail="User stories are not ready yet.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("missing_user_stories", "User stories are not ready yet."),
+        )
 
     user_stories_draft = state_snapshot.values.get("user_stories_draft", "").strip()
     if not user_stories_draft:
         raise HTTPException(
             status_code=400,
-            detail="User stories must be generated before pushing to Jira.",
+            detail=error_detail(
+                "missing_user_stories",
+                "User stories must be generated before pushing to Jira.",
+            ),
         )
 
     parse_prompt = build_story_parse_prompt(user_stories_draft)
@@ -540,7 +576,7 @@ async def push_to_jira(request: PushToJiraRequest):
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Model failed to parse user stories: {exc}",
+            detail=error_detail("model_error", f"Model failed to parse user stories: {exc}"),
         )
 
     # Strip any accidental markdown code fences the model may have added
@@ -558,7 +594,10 @@ async def push_to_jira(request: PushToJiraRequest):
     except (json_lib.JSONDecodeError, ValueError) as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"Could not parse model output as JSON: {exc}. Raw output: {raw_json[:500]}",
+            detail=error_detail(
+                "story_parse_error",
+                f"Could not parse model output as JSON: {exc}. Raw output: {raw_json[:500]}",
+            ),
         )
 
     # Step 2: Create Jira issues
@@ -617,12 +656,18 @@ async def push_to_jira(request: PushToJiraRequest):
             error_body = exc.read().decode("utf-8", errors="replace")
             raise HTTPException(
                 status_code=502,
-                detail=f"Jira API error (HTTP {exc.code}): {error_body}",
+                detail=error_detail(
+                    "jira_api_error",
+                    f"Jira API error (HTTP {exc.code}): {error_body}",
+                ),
             )
         except urllib.error.URLError as exc:
             raise HTTPException(
                 status_code=502,
-                detail=f"Could not reach Jira at '{request.jira_domain}': {exc.reason}",
+                detail=error_detail(
+                    "jira_network_error",
+                    f"Could not reach Jira at '{request.jira_domain}': {exc.reason}",
+                ),
             )
 
     return PushToJiraResponse(
@@ -672,15 +717,27 @@ async def get_jira_projects(domain: str, email: str, token: str):
             )
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            raise HTTPException(status_code=401, detail="Invalid Jira credentials")
-        raise HTTPException(status_code=502, detail=f"Jira error: {exc.reason}")
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("jira_auth_error", "Invalid Jira credentials"),
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("jira_api_error", f"Jira error: {exc.reason}"),
+        )
     except urllib.error.URLError as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Could not reach Jira at '{domain}': {exc.reason}",
+            detail=error_detail(
+                "jira_network_error",
+                f"Could not reach Jira at '{domain}': {exc.reason}",
+            ),
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("jira_error", str(exc)),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -711,7 +768,7 @@ async def reset_prd(thread_id: str):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to reset PRD for thread '{thread_id}': {exc}",
+            detail=error_detail("state_error", f"Failed to reset PRD for thread '{thread_id}': {exc}"),
         )
     return ResetPrdResponse(success=True)
 
@@ -721,7 +778,7 @@ async def reset_prd(thread_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/export/{thread_id}")
-async def export_project(thread_id: str):
+async def export_project(thread_id: str, format: str = "markdown"):
     """
     Export the full project document (PRD + Architecture) as a downloadable Markdown file.
     Returns HTTP 400 if both sections are empty.
@@ -732,7 +789,7 @@ async def export_project(thread_id: str):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to retrieve thread state: {exc}",
+            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
         )
 
     values = state_snapshot.values if (state_snapshot and state_snapshot.values) else {}
@@ -743,7 +800,19 @@ async def export_project(thread_id: str):
     if not prd_draft and not architecture_draft and not user_stories_draft:
         raise HTTPException(
             status_code=400,
-            detail="Nothing to export — PRD, architecture, and user stories are all empty.",
+            detail=error_detail(
+                "export_empty",
+                "Nothing to export — PRD, architecture, and user stories are all empty.",
+            ),
+        )
+
+    if format not in {"markdown", "json"}:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "invalid_export_format",
+                f"Unsupported export format '{format}'. Valid options: ['json', 'markdown']",
+            ),
         )
 
     sections: list[str] = [f"# Project: {thread_id}\n"]
@@ -767,6 +836,16 @@ async def export_project(thread_id: str):
         sections.append(user_stories_draft)
 
     markdown_content = "\n".join(sections)
+
+    if format == "json":
+        return JSONResponse(
+            content={
+                "thread_id": thread_id,
+                "prd": prd_draft,
+                "architecture": architecture_draft,
+                "user_stories": user_stories_draft,
+            }
+        )
 
     return Response(
         content=markdown_content,
@@ -887,16 +966,20 @@ async def upload_file(file: UploadFile = File(...)):
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=415,
-            detail=(
+            detail=error_detail(
+                "unsupported_file_type",
                 f"Unsupported file type '{ext}'. "
-                f"Supported: {sorted(SUPPORTED_EXTENSIONS)}"
+                f"Supported: {sorted(SUPPORTED_EXTENSIONS)}",
             ),
         )
 
     try:
         raw = await file.read()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("file_read_error", f"Failed to read uploaded file: {exc}"),
+        )
 
     try:
         if ext in {".xlsx", ".xls"}:
@@ -913,15 +996,18 @@ async def upload_file(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Failed to parse '{filename}': {exc}",
+            raise HTTPException(
+                status_code=422,
+                detail=error_detail("file_parse_error", f"Failed to parse '{filename}': {exc}"),
         )
 
     if not content.strip():
         raise HTTPException(
             status_code=422,
-            detail=f"No text content could be extracted from '{filename}'.",
+            detail=error_detail(
+                "file_parse_error",
+                f"No text content could be extracted from '{filename}'.",
+            ),
         )
 
     return UploadResponse(filename=filename, content=content)

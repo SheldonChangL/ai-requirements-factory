@@ -190,6 +190,9 @@ Core endpoints:
 - `GET /api/export/{thread_id}`
 - `GET /api/models/check`
 
+`/api/export/{thread_id}` supports `format=markdown` and `format=json`.  
+The export and integration contract is documented in [docs/exports-and-integrations.md](/Users/sheldon.chang/Tools/ai-dev-ver2/docs/exports-and-integrations.md).
+
 ## Contributing
 
 See `CONTRIBUTING.md`.

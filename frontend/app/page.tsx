@@ -77,6 +77,13 @@ interface UploadApiResponse {
   content: string;
 }
 
+interface ApiErrorPayload {
+  detail?: string | {
+    category?: string;
+    message?: string;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -160,6 +167,22 @@ function loadJiraConfig(): JiraConfig {
 function saveJiraConfig(cfg: JiraConfig) {
   if (typeof window === "undefined") return;
   localStorage.setItem(JIRA_CONFIG_STORAGE_KEY, JSON.stringify(cfg));
+}
+function formatApiErrorMessage(payload: ApiErrorPayload, status: number): string {
+  if (typeof payload.detail === "string" && payload.detail.trim()) {
+    return payload.detail;
+  }
+  if (payload.detail && typeof payload.detail === "object") {
+    const category = typeof payload.detail.category === "string" ? payload.detail.category : "";
+    const message = typeof payload.detail.message === "string" ? payload.detail.message : "";
+    if (category && message) return `${category}: ${message}`;
+    if (message) return message;
+  }
+  return `HTTP ${status}`;
+}
+async function throwApiError(response: globalThis.Response): Promise<never> {
+  const payload = await response.json().catch(() => ({} as ApiErrorPayload));
+  throw new Error(formatApiErrorMessage(payload, response.status));
 }
 
 // ---------------------------------------------------------------------------
@@ -789,8 +812,7 @@ export default function HomePage() {
       });
       const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        await throwApiError(res);
       }
       const data = await res.json();
       const projects: { key: string; name: string; id: string }[] = data.projects ?? [];
@@ -834,8 +856,7 @@ export default function HomePage() {
         }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        await throwApiError(res);
       }
       const data = await res.json();
       setJiraPushResult({ count: data.count, issues: data.created_issues });
@@ -876,8 +897,7 @@ export default function HomePage() {
         });
 
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.detail || `HTTP ${response.status}`);
+          await throwApiError(response);
         }
 
         const data: ChatApiResponse = await response.json();
@@ -948,8 +968,7 @@ export default function HomePage() {
       try {
         const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: formData });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `HTTP ${res.status}`);
+          await throwApiError(res);
         }
         const data: UploadApiResponse = await res.json();
         setAttachedFiles((prev) => [...prev, { filename: data.filename, content: data.content }]);
