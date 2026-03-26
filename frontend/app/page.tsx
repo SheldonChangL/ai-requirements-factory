@@ -17,6 +17,7 @@ import mermaid from "mermaid";
 // ---------------------------------------------------------------------------
 
 type ModelChoice = "ollama" | "gemini-cli" | "claude-cli" | "codex-cli";
+type DeliveryTarget = "jira" | "github";
 
 interface Project {
   id: string;
@@ -45,9 +46,15 @@ interface JiraConfig {
   projectKey: string;
 }
 
-interface JiraPushResult {
+interface GitHubConfig {
+  owner: string;
+  repo: string;
+}
+
+interface DeliveryPushResult {
+  target: DeliveryTarget;
   count: number;
-  issues: string[];
+  items: string[];
 }
 
 interface Message {
@@ -94,6 +101,7 @@ const API_BASE = DEFAULT_API_BASE;
 const ACCEPTED_EXTENSIONS = ".xlsx,.xls,.docx,.pdf,.md";
 const PROJECTS_STORAGE_KEY = "ai-factory-projects";
 const JIRA_CONFIG_STORAGE_KEY = "jira-config";
+const GITHUB_CONFIG_STORAGE_KEY = "github-config";
 
 const MODEL_OPTIONS: {
   value: ModelChoice;
@@ -167,6 +175,19 @@ function loadJiraConfig(): JiraConfig {
 function saveJiraConfig(cfg: JiraConfig) {
   if (typeof window === "undefined") return;
   localStorage.setItem(JIRA_CONFIG_STORAGE_KEY, JSON.stringify(cfg));
+}
+function loadGitHubConfig(): GitHubConfig {
+  if (typeof window === "undefined") return { owner: "", repo: "" };
+  try {
+    const raw = localStorage.getItem(GITHUB_CONFIG_STORAGE_KEY);
+    if (!raw) return { owner: "", repo: "" };
+    return JSON.parse(raw) as GitHubConfig;
+  } catch { /* ignore */ }
+  return { owner: "", repo: "" };
+}
+function saveGitHubConfig(cfg: GitHubConfig) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(GITHUB_CONFIG_STORAGE_KEY, JSON.stringify(cfg));
 }
 function formatApiErrorMessage(payload: ApiErrorPayload, status: number): string {
   if (typeof payload.detail === "string" && payload.detail.trim()) {
@@ -495,10 +516,13 @@ export default function HomePage() {
   // ── Jira state ───────────────────────────────────────────────────────────
   const [jiraConfig, setJiraConfig]               = useState<JiraConfig>({ domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" });
   const [jiraToken, setJiraToken]                 = useState("");
-  const [showJiraModal, setShowJiraModal]         = useState(false);
-  const [isPushingToJira, setIsPushingToJira]     = useState(false);
-  const [jiraPushResult, setJiraPushResult]       = useState<JiraPushResult | null>(null);
-  const [jiraErrorMsg, setJiraErrorMsg]           = useState<string | null>(null);
+  const [githubConfig, setGitHubConfig]           = useState<GitHubConfig>({ owner: "", repo: "" });
+  const [githubToken, setGitHubToken]             = useState("");
+  const [showDeliveryModal, setShowDeliveryModal] = useState(false);
+  const [deliveryTarget, setDeliveryTarget]       = useState<DeliveryTarget>("jira");
+  const [isPublishingDelivery, setIsPublishingDelivery] = useState(false);
+  const [deliveryPushResult, setDeliveryPushResult] = useState<DeliveryPushResult | null>(null);
+  const [deliveryErrorMsg, setDeliveryErrorMsg]   = useState<string | null>(null);
   const [jiraProjects, setJiraProjects]           = useState<{ key: string; name: string; id: string }[]>([]);
   const [isLoadingJiraProjects, setIsLoadingJiraProjects] = useState(false);
   const [jiraProjectsError, setJiraProjectsError] = useState<string | null>(null);
@@ -550,6 +574,7 @@ export default function HomePage() {
       setActiveThreadId(stored[0].id);
     }
     setJiraConfig(loadJiraConfig());
+    setGitHubConfig(loadGitHubConfig());
   }, []);
 
   // ── Hydrate chat state whenever active thread changes ───────────────────
@@ -643,8 +668,8 @@ export default function HomePage() {
     setAttachedFiles([]);
     setError(null);
     setUploadError(null);
-    setJiraPushResult(null);
-    setJiraErrorMsg(null);
+    setDeliveryPushResult(null);
+    setDeliveryErrorMsg(null);
     setAmendmentBannerDismissed(false);
   };
 
@@ -832,39 +857,51 @@ export default function HomePage() {
     }
   };
 
-  // ── Push to Jira ─────────────────────────────────────────────────────────
-  const handlePushToJira = async () => {
-    if (!activeThreadId) return;
-    setIsPushingToJira(true);
-    setJiraErrorMsg(null);
-    setJiraPushResult(null);
+  const openDeliveryModal = (target: DeliveryTarget) => {
+    setDeliveryTarget(target);
+    setShowDeliveryModal(true);
+    setDeliveryErrorMsg(null);
+    setJiraProjectsError(null);
+    if (target === "jira") setJiraProjects([]);
+  };
 
-    // Persist domain/email/projectKey (not the token)
+  // ── Publish delivery target ──────────────────────────────────────────────
+  const handlePublishDelivery = async () => {
+    if (!activeThreadId) return;
+    setIsPublishingDelivery(true);
+    setDeliveryErrorMsg(null);
+    setDeliveryPushResult(null);
+
     saveJiraConfig(jiraConfig);
+    saveGitHubConfig(githubConfig);
 
     try {
-      const res = await fetch(`${API_BASE}/api/push_to_jira`, {
+      const res = await fetch(`${API_BASE}/api/delivery/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           thread_id: activeThreadId,
           model_choice: modelChoice,
+          target: deliveryTarget,
           jira_domain: jiraConfig.domain,
           jira_email: jiraConfig.email,
           jira_token: jiraToken,
           jira_project_key: jiraConfig.projectKey,
+          github_owner: githubConfig.owner,
+          github_repo: githubConfig.repo,
+          github_token: githubToken,
         }),
       });
       if (!res.ok) {
         await throwApiError(res);
       }
       const data = await res.json();
-      setJiraPushResult({ count: data.count, issues: data.created_issues });
-      setShowJiraModal(false);
+      setDeliveryPushResult({ target: data.target as DeliveryTarget, count: data.count, items: data.created_items });
+      setShowDeliveryModal(false);
     } catch (e: unknown) {
-      setJiraErrorMsg(e instanceof Error ? e.message : "Unknown error");
+      setDeliveryErrorMsg(e instanceof Error ? e.message : "Unknown error");
     } finally {
-      setIsPushingToJira(false);
+      setIsPublishingDelivery(false);
     }
   };
 
@@ -1790,15 +1827,14 @@ export default function HomePage() {
                       </svg>
                       Generated
                     </span>
-                    {/* Feature A — Push to Jira button */}
                     <button
                       type="button"
-                      onClick={() => { setShowJiraModal(true); setJiraErrorMsg(null); setJiraProjectsError(null); setJiraProjects([]); }}
-                      disabled={isPushingToJira}
+                      onClick={() => openDeliveryModal("jira")}
+                      disabled={isPublishingDelivery}
                       title="Push user stories to Jira"
                       className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-blue-900/60 border border-blue-700/60 hover:bg-blue-800/60 hover:border-blue-500/70 rounded-lg text-xs text-blue-300 font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isPushingToJira ? (
+                      {isPublishingDelivery && deliveryTarget === "jira" ? (
                         <Spinner className="w-3 h-3" />
                       ) : (
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1808,10 +1844,25 @@ export default function HomePage() {
                       )}
                       📤 Push to Jira
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => openDeliveryModal("github")}
+                      disabled={isPublishingDelivery}
+                      title="Create GitHub issues from user stories"
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900/70 border border-zinc-600 hover:bg-zinc-800 hover:border-zinc-400 rounded-lg text-xs text-zinc-200 font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isPublishingDelivery && deliveryTarget === "github" ? (
+                        <Spinner className="w-3 h-3" />
+                      ) : (
+                        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 .5C5.648.5.5 5.648.5 12a11.5 11.5 0 008 10.938c.6.112.82-.262.82-.582 0-.288-.01-1.05-.016-2.062-3.252.706-3.938-1.568-3.938-1.568-.532-1.35-1.3-1.71-1.3-1.71-1.062-.726.08-.712.08-.712 1.174.082 1.792 1.206 1.792 1.206 1.044 1.79 2.738 1.272 3.406.972.106-.756.41-1.272.744-1.564-2.596-.296-5.326-1.298-5.326-5.776 0-1.276.456-2.32 1.204-3.138-.12-.296-.522-1.49.114-3.106 0 0 .982-.314 3.218 1.2A11.2 11.2 0 0112 6.174c.996.004 2 .134 2.938.394 2.234-1.514 3.214-1.2 3.214-1.2.638 1.616.236 2.81.116 3.106.75.818 1.202 1.862 1.202 3.138 0 4.49-2.734 5.476-5.338 5.766.42.362.794 1.078.794 2.172 0 1.568-.014 2.832-.014 3.218 0 .322.216.698.826.58A11.502 11.502 0 0023.5 12C23.5 5.648 18.352.5 12 .5z" />
+                        </svg>
+                      )}
+                      Create GitHub Issues
+                    </button>
                   </div>
 
-                  {/* Jira push success banner */}
-                  {jiraPushResult && (
+                  {deliveryPushResult && (
                     <div className="mb-4 flex items-start gap-2 bg-blue-950/50 border border-blue-700/50 rounded-xl px-4 py-3 text-sm">
                       <svg className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                         <path fillRule="evenodd"
@@ -1820,15 +1871,15 @@ export default function HomePage() {
                       </svg>
                       <div className="flex-1 min-w-0">
                         <p className="text-blue-300 font-semibold">
-                          {jiraPushResult.count} issue{jiraPushResult.count !== 1 ? "s" : ""} created in Jira
+                          {deliveryPushResult.count} item{deliveryPushResult.count !== 1 ? "s" : ""} published to {deliveryPushResult.target === "jira" ? "Jira" : "GitHub"}
                         </p>
                         <p className="text-blue-500 text-xs mt-0.5 font-mono break-all">
-                          {jiraPushResult.issues.join(" · ")}
+                          {deliveryPushResult.items.join(" · ")}
                         </p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => setJiraPushResult(null)}
+                        onClick={() => setDeliveryPushResult(null)}
                         className="shrink-0 text-blue-600 hover:text-blue-300 transition-colors"
                         aria-label="Dismiss"
                       >
@@ -1853,26 +1904,33 @@ export default function HomePage() {
       </div>
 
       {/* ================================================================ */}
-      {/* JIRA MODAL                                                        */}
+      {/* DELIVERY MODAL                                                    */}
       {/* ================================================================ */}
-      {showJiraModal && (
+      {showDeliveryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
           <div className="w-full max-w-md bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden">
-            {/* Modal header */}
             <div className="flex items-center gap-3 px-5 py-4 border-b border-zinc-700 bg-gradient-to-r from-blue-950/60 to-indigo-950/40">
               <div className="w-8 h-8 rounded-lg bg-blue-600/80 flex items-center justify-center shrink-0">
-                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
+                {deliveryTarget === "jira" ? (
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 .5C5.648.5.5 5.648.5 12a11.5 11.5 0 008 10.938c.6.112.82-.262.82-.582 0-.288-.01-1.05-.016-2.062-3.252.706-3.938-1.568-3.938-1.568-.532-1.35-1.3-1.71-1.3-1.71-1.062-.726.08-.712.08-.712 1.174.082 1.792 1.206 1.792 1.206 1.044 1.79 2.738 1.272 3.406.972.106-.756.41-1.272.744-1.564-2.596-.296-5.326-1.298-5.326-5.776 0-1.276.456-2.32 1.204-3.138-.12-.296-.522-1.49.114-3.106 0 0 .982-.314 3.218 1.2A11.2 11.2 0 0112 6.174c.996.004 2 .134 2.938.394 2.234-1.514 3.214-1.2 3.214-1.2.638 1.616.236 2.81.116 3.106.75.818 1.202 1.862 1.202 3.138 0 4.49-2.734 5.476-5.338 5.766.42.362.794 1.078.794 2.172 0 1.568-.014 2.832-.014 3.218 0 .322.216.698.826.58A11.502 11.502 0 0023.5 12C23.5 5.648 18.352.5 12 .5z" />
+                  </svg>
+                )}
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-bold text-zinc-100">Push to Jira</h3>
-                <p className="text-xs text-zinc-500">Configure your Jira connection</p>
+                <h3 className="text-sm font-bold text-zinc-100">
+                  {deliveryTarget === "jira" ? "Publish to Jira" : "Create GitHub Issues"}
+                </h3>
+                <p className="text-xs text-zinc-500">Choose a delivery target and publish the generated user stories</p>
               </div>
               <button
                 type="button"
-                onClick={() => setShowJiraModal(false)}
+                onClick={() => setShowDeliveryModal(false)}
                 className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors"
                 aria-label="Close"
               >
@@ -1880,171 +1938,232 @@ export default function HomePage() {
               </button>
             </div>
 
-            {/* Modal body */}
             <div className="px-5 py-4 space-y-4">
-              {/* Domain */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                  Jira Domain
-                </label>
-                <input
-                  type="text"
-                  value={jiraConfig.domain}
-                  onChange={(e) => {
-                    setJiraConfig((c) => ({ ...c, domain: e.target.value }));
-                    setJiraProjects([]);
-                    setJiraProjectsError(null);
-                  }}
-                  placeholder="yourcompany.atlassian.net"
-                  className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeliveryTarget("jira")}
+                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "jira" ? "bg-blue-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
+                >
+                  Jira
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeliveryTarget("github")}
+                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "github" ? "bg-zinc-200 text-zinc-950" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
+                >
+                  GitHub
+                </button>
               </div>
 
-              {/* Email */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                  Jira Email
-                </label>
-                <input
-                  type="email"
-                  value={jiraConfig.email}
-                  onChange={(e) => {
-                    setJiraConfig((c) => ({ ...c, email: e.target.value }));
-                    setJiraProjects([]);
-                    setJiraProjectsError(null);
-                  }}
-                  placeholder="you@example.com"
-                  className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                />
-              </div>
+              {deliveryTarget === "jira" ? (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Jira Domain
+                    </label>
+                    <input
+                      type="text"
+                      value={jiraConfig.domain}
+                      onChange={(e) => {
+                        setJiraConfig((c) => ({ ...c, domain: e.target.value }));
+                        setJiraProjects([]);
+                        setJiraProjectsError(null);
+                      }}
+                      placeholder="yourcompany.atlassian.net"
+                      className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
 
-              {/* API Token + Load Projects button */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                  API Token
-                  <span className="ml-1.5 text-zinc-600 font-normal">(not saved)</span>
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={jiraToken}
-                    onChange={(e) => {
-                      setJiraToken(e.target.value);
-                      setJiraProjects([]);
-                      setJiraProjectsError(null);
-                    }}
-                    placeholder="Your Jira API token"
-                    className="flex-1 bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleLoadJiraProjects}
-                    disabled={
-                      isLoadingJiraProjects ||
-                      !jiraConfig.domain.trim() ||
-                      !jiraConfig.email.trim() ||
-                      !jiraToken.trim()
-                    }
-                    title="Fetch projects from Jira"
-                    className="flex items-center gap-1.5 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed border border-zinc-600 rounded-lg text-xs text-zinc-300 font-medium transition-colors shrink-0 whitespace-nowrap"
-                  >
-                    {isLoadingJiraProjects ? (
-                      <Spinner className="w-3.5 h-3.5" />
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Jira Email
+                    </label>
+                    <input
+                      type="email"
+                      value={jiraConfig.email}
+                      onChange={(e) => {
+                        setJiraConfig((c) => ({ ...c, email: e.target.value }));
+                        setJiraProjects([]);
+                        setJiraProjectsError(null);
+                      }}
+                      placeholder="you@example.com"
+                      className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      API Token
+                      <span className="ml-1.5 text-zinc-600 font-normal">(not saved)</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={jiraToken}
+                        onChange={(e) => {
+                          setJiraToken(e.target.value);
+                          setJiraProjects([]);
+                          setJiraProjectsError(null);
+                        }}
+                        placeholder="Your Jira API token"
+                        className="flex-1 bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleLoadJiraProjects}
+                        disabled={
+                          isLoadingJiraProjects ||
+                          !jiraConfig.domain.trim() ||
+                          !jiraConfig.email.trim() ||
+                          !jiraToken.trim()
+                        }
+                        title="Fetch projects from Jira"
+                        className="flex items-center gap-1.5 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed border border-zinc-600 rounded-lg text-xs text-zinc-300 font-medium transition-colors shrink-0 whitespace-nowrap"
+                      >
+                        {isLoadingJiraProjects ? (
+                          <Spinner className="w-3.5 h-3.5" />
+                        ) : (
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                          </svg>
+                        )}
+                        Load Projects
+                      </button>
+                    </div>
+                  </div>
+
+                  {jiraProjectsError && (
+                    <div className="flex items-start gap-2 bg-red-950/50 border border-red-800/50 rounded-lg px-3 py-2.5 text-xs text-red-300">
+                      <span className="shrink-0 mt-0.5">⚠</span>
+                      <span className="flex-1 break-words">Could not load projects: {jiraProjectsError}</span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Project
+                      {jiraProjects.length > 0 && (
+                        <span className="ml-1.5 text-zinc-600 font-normal">
+                          ({jiraProjects.length} loaded)
+                        </span>
+                      )}
+                    </label>
+                    {jiraProjects.length > 0 ? (
+                      <div className="relative">
+                        <select
+                          value={jiraConfig.projectKey}
+                          onChange={(e) => setJiraConfig((c) => ({ ...c, projectKey: e.target.value }))}
+                          className="w-full appearance-none bg-zinc-900 border border-zinc-600 rounded-lg px-3 pr-8 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors cursor-pointer"
+                        >
+                          <option value="" disabled>Select a project…</option>
+                          {jiraProjects.map((p) => (
+                            <option key={p.id} value={p.key}>
+                              {p.name} ({p.key})
+                            </option>
+                          ))}
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
+                          <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </div>
+                      </div>
                     ) : (
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                      </svg>
+                      <input
+                        type="text"
+                        value={jiraConfig.projectKey}
+                        onChange={(e) => setJiraConfig((c) => ({ ...c, projectKey: e.target.value.toUpperCase() }))}
+                        placeholder="e.g. PROJ"
+                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors font-mono"
+                      />
                     )}
-                    🔍 Load Projects
-                  </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      GitHub Owner
+                    </label>
+                    <input
+                      type="text"
+                      value={githubConfig.owner}
+                      onChange={(e) => setGitHubConfig((c) => ({ ...c, owner: e.target.value }))}
+                      placeholder="your-org-or-username"
+                      className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
 
-              {/* Projects error */}
-              {jiraProjectsError && (
-                <div className="flex items-start gap-2 bg-red-950/50 border border-red-800/50 rounded-lg px-3 py-2.5 text-xs text-red-300">
-                  <span className="shrink-0 mt-0.5">⚠</span>
-                  <span className="flex-1 break-words">Could not load projects: {jiraProjectsError}</span>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Repository
+                    </label>
+                    <input
+                      type="text"
+                      value={githubConfig.repo}
+                      onChange={(e) => setGitHubConfig((c) => ({ ...c, repo: e.target.value }))}
+                      placeholder="repo-name"
+                      className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      GitHub Token
+                      <span className="ml-1.5 text-zinc-600 font-normal">(not saved)</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={githubToken}
+                      onChange={(e) => setGitHubToken(e.target.value)}
+                      placeholder="GitHub personal access token"
+                      className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
                 </div>
               )}
 
-              {/* Project selection — dropdown if loaded, manual text input otherwise */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                  Project
-                  {jiraProjects.length > 0 && (
-                    <span className="ml-1.5 text-zinc-600 font-normal">
-                      ({jiraProjects.length} project{jiraProjects.length !== 1 ? "s" : ""} loaded)
-                    </span>
-                  )}
-                </label>
-
-                {jiraProjects.length > 0 ? (
-                  <div className="relative">
-                    <select
-                      value={jiraConfig.projectKey}
-                      onChange={(e) => setJiraConfig((c) => ({ ...c, projectKey: e.target.value }))}
-                      className="w-full appearance-none bg-zinc-900 border border-zinc-600 rounded-lg px-3 pr-8 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors cursor-pointer"
-                    >
-                      <option value="" disabled>Select a project…</option>
-                      {jiraProjects.map((p) => (
-                        <option key={p.id} value={p.key}>
-                          {p.name} ({p.key})
-                        </option>
-                      ))}
-                    </select>
-                    <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
-                      <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </div>
-                  </div>
-                ) : (
-                  <input
-                    type="text"
-                    value={jiraConfig.projectKey}
-                    onChange={(e) => setJiraConfig((c) => ({ ...c, projectKey: e.target.value.toUpperCase() }))}
-                    placeholder="e.g. PROJ  (or use 🔍 Load Projects above)"
-                    className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors font-mono"
-                  />
-                )}
-              </div>
-
-              {/* Push error */}
-              {jiraErrorMsg && (
+              {deliveryErrorMsg && (
                 <div className="flex items-start gap-2 bg-red-950/50 border border-red-800/50 rounded-lg px-3 py-2.5 text-xs text-red-300">
                   <span className="shrink-0 mt-0.5">⚠</span>
-                  <span className="flex-1 break-words">{jiraErrorMsg}</span>
+                  <span className="flex-1 break-words">{deliveryErrorMsg}</span>
                 </div>
               )}
             </div>
 
-            {/* Modal footer */}
             <div className="px-5 py-4 border-t border-zinc-700/60 bg-zinc-900/50 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setShowJiraModal(false)}
+                onClick={() => setShowDeliveryModal(false)}
                 className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-700/50 hover:bg-zinc-700 rounded-lg transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={handlePushToJira}
+                onClick={handlePublishDelivery}
                 disabled={
-                  isPushingToJira ||
-                  !jiraConfig.domain.trim() ||
-                  !jiraConfig.email.trim() ||
-                  !jiraToken.trim() ||
-                  !jiraConfig.projectKey.trim()
+                  isPublishingDelivery ||
+                  (deliveryTarget === "jira" && (
+                    !jiraConfig.domain.trim() ||
+                    !jiraConfig.email.trim() ||
+                    !jiraToken.trim() ||
+                    !jiraConfig.projectKey.trim()
+                  )) ||
+                  (deliveryTarget === "github" && (
+                    !githubConfig.owner.trim() ||
+                    !githubConfig.repo.trim() ||
+                    !githubToken.trim()
+                  ))
                 }
                 className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"
               >
-                {isPushingToJira ? (
+                {isPublishingDelivery ? (
                   <>
                     <Spinner className="w-3.5 h-3.5" />
-                    Pushing…
+                    Publishing…
                   </>
                 ) : (
                   <>
@@ -2052,7 +2171,7 @@ export default function HomePage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                     </svg>
-                    Save &amp; Push
+                    Publish
                   </>
                 )}
               </button>
