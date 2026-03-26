@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+langgraph[sqlite]
+langgraph-checkpoint-sqlite
+langchain
+langchain-community
+langchain-core
+langchain-ollama
+python-multipart
+openpyxl
+python-docx
+PyMuPDF

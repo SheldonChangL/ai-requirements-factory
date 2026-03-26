@@ -1,0 +1,30 @@
+# Next.js
+frontend/.next/
+frontend/node_modules/
+
+# Python
+backend/.venv/
+backend/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# Logs
+*.log
+
+# Runtime
+.pids
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/
+backend/ai_factory.db*
