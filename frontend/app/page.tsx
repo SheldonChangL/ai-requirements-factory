@@ -650,6 +650,12 @@ export default function HomePage() {
   const [selectedGithubRepo, setSelectedGithubRepo] = useState("");
   const [isLoadingGithubRepos, setIsLoadingGithubRepos] = useState(false);
   const [githubReposFetchFailed, setGithubReposFetchFailed] = useState(false);
+  // ── Stage status ─────────────────────────────────────────────────────────
+  type StageStatus = "draft" | "approved" | "needs_revision";
+  const [prdStatus, setPrdStatus]         = useState<StageStatus>("draft");
+  const [archStatus, setArchStatus]       = useState<StageStatus>("draft");
+  const [storiesStatus, setStoriesStatus] = useState<StageStatus>("draft");
+
   // delivery modal step: "configure" → pick target/project, "preview" → review items
   const [deliveryStep, setDeliveryStep]           = useState<"configure" | "preview">("configure");
   const [deliveryPreviewItems, setDeliveryPreviewItems] = useState<{ title: string; group: string; labels: string[]; estimate: number }[]>([]);
@@ -726,6 +732,9 @@ export default function HomePage() {
       setStoriesChatMessages([]);
       setStoriesChatInput("");
       setAmendmentBannerDismissed(false);
+      setPrdStatus("draft");
+      setArchStatus("draft");
+      setStoriesStatus("draft");
       return;
     }
 
@@ -751,7 +760,7 @@ export default function HomePage() {
 
     const tid = activeThreadId;
 
-    // Load main thread state + both stage chat histories in parallel
+    // Load main thread state + stage chat histories + stage statuses in parallel
     Promise.all([
       fetch(`${API_BASE}/api/chat/${tid}`, { signal: controller.signal }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -761,8 +770,10 @@ export default function HomePage() {
         .then((r) => r.ok ? r.json() : { messages: [] }),
       fetch(`${API_BASE}/api/stage/stories/chat/${tid}`, { signal: controller.signal })
         .then((r) => r.ok ? r.json() : { messages: [] }),
+      fetch(`${API_BASE}/api/stage/statuses/${tid}`, { signal: controller.signal })
+        .then((r) => r.ok ? r.json() : { prd: "draft", architecture: "draft", stories: "draft" }),
     ])
-      .then(([data, archHistory, storiesHistory]) => {
+      .then(([data, archHistory, storiesHistory, statuses]) => {
         setMessages(
           data.messages.map((m) => ({
             role: m.role as "user" | "assistant",
@@ -775,6 +786,9 @@ export default function HomePage() {
         setUserStoriesDraft(data.user_stories_draft ?? "");
         setArchChatMessages(archHistory.messages ?? []);
         setStoriesChatMessages(storiesHistory.messages ?? []);
+        setPrdStatus((statuses.prd ?? "draft") as StageStatus);
+        setArchStatus((statuses.architecture ?? "draft") as StageStatus);
+        setStoriesStatus((statuses.stories ?? "draft") as StageStatus);
         if (data.user_stories_draft) {
           setActiveWorkspaceStage("stories");
         } else if (data.architecture_draft) {
@@ -1022,6 +1036,21 @@ export default function HomePage() {
     } finally {
       setIsSavingArch(false);
     }
+  };
+
+  // ── Stage status approve / reopen ────────────────────────────────────────
+  const handleSetStageStatus = async (stage: "prd" | "architecture" | "stories", status: StageStatus) => {
+    if (!activeThreadId) return;
+    try {
+      await fetch(`${API_BASE}/api/stage/${stage}/status/${activeThreadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (stage === "prd") setPrdStatus(status);
+      else if (stage === "architecture") setArchStatus(status);
+      else setStoriesStatus(status);
+    } catch { /* ignore — UI still reflects optimistic update above */ }
   };
 
   // ── Stage chat send ──────────────────────────────────────────────────────
@@ -1976,16 +2005,29 @@ export default function HomePage() {
                   </span>
                   <div className="ml-auto flex flex-wrap gap-2">
                     {prdDraft && !isEditingPrd && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingPrdContent(prdDraft);
-                          setIsEditingPrd(true);
-                        }}
-                        className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-amber-600/60 hover:text-amber-300"
-                      >
-                        Edit Directly
-                      </button>
+                      <>
+                        {prdStatus === "approved" ? (
+                          <button type="button" onClick={() => handleSetStageStatus("prd", "draft")}
+                            className="rounded-lg border border-emerald-700/50 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-300 hover:bg-emerald-950/70 transition-colors">
+                            ✓ Approved — Reopen
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => handleSetStageStatus("prd", "approved")}
+                            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 hover:border-emerald-600/60 hover:text-emerald-300 transition-colors">
+                            Approve
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingPrdContent(prdDraft);
+                            setIsEditingPrd(true);
+                          }}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-amber-600/60 hover:text-amber-300"
+                        >
+                          Edit Directly
+                        </button>
+                      </>
                     )}
                     {prdDraft && (
                       <button
@@ -2094,6 +2136,17 @@ export default function HomePage() {
                   <div className="ml-auto flex flex-wrap gap-2">
                     {architectureDraft && !isEditingArch && (
                       <>
+                        {archStatus === "approved" ? (
+                          <button type="button" onClick={() => handleSetStageStatus("architecture", "draft")}
+                            className="rounded-lg border border-emerald-700/50 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-300 hover:bg-emerald-950/70 transition-colors">
+                            ✓ Approved — Reopen
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => handleSetStageStatus("architecture", "approved")}
+                            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 hover:border-emerald-600/60 hover:text-emerald-300 transition-colors">
+                            Approve
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -2213,6 +2266,17 @@ export default function HomePage() {
                   <div className="ml-auto flex flex-wrap gap-2">
                     {userStoriesDraft && !isEditingStories && (
                       <>
+                        {storiesStatus === "approved" ? (
+                          <button type="button" onClick={() => handleSetStageStatus("stories", "draft")}
+                            className="rounded-lg border border-emerald-700/50 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-300 hover:bg-emerald-950/70 transition-colors">
+                            ✓ Approved — Reopen
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => handleSetStageStatus("stories", "approved")}
+                            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 hover:border-emerald-600/60 hover:text-emerald-300 transition-colors">
+                            Approve
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {

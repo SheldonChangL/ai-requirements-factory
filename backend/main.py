@@ -113,7 +113,40 @@ conn.execute("""
 conn.execute(
     "CREATE INDEX IF NOT EXISTS idx_stage_messages ON stage_messages (thread_id, stage, id)"
 )
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS stage_status (
+        thread_id  TEXT NOT NULL,
+        stage      TEXT NOT NULL,
+        status     TEXT NOT NULL DEFAULT 'draft',
+        updated_at REAL NOT NULL DEFAULT (strftime('%s','now')),
+        PRIMARY KEY (thread_id, stage)
+    )
+""")
 conn.commit()
+
+
+def _get_stage_status(thread_id: str, stage: str) -> str:
+    row = conn.execute(
+        "SELECT status FROM stage_status WHERE thread_id=? AND stage=?",
+        (thread_id, stage),
+    ).fetchone()
+    return row[0] if row else "draft"
+
+
+def _set_stage_status(thread_id: str, stage: str, status: str) -> None:
+    conn.execute(
+        """INSERT INTO stage_status (thread_id, stage, status, updated_at)
+           VALUES (?, ?, ?, strftime('%s','now'))
+           ON CONFLICT(thread_id, stage) DO UPDATE SET
+               status=excluded.status, updated_at=excluded.updated_at""",
+        (thread_id, stage, status),
+    )
+    conn.commit()
+
+
+def _reset_stage_status(thread_id: str, stage: str) -> None:
+    """Reset to draft when content is regenerated."""
+    _set_stage_status(thread_id, stage, "draft")
 
 
 def _load_stage_messages(thread_id: str, stage: str) -> list[dict]:
@@ -134,6 +167,7 @@ def _append_stage_message(thread_id: str, stage: str, role: str, content: str) -
 
 def _delete_stage_messages(thread_id: str) -> None:
     conn.execute("DELETE FROM stage_messages WHERE thread_id=?", (thread_id,))
+    conn.execute("DELETE FROM stage_status WHERE thread_id=?", (thread_id,))
     conn.commit()
 
 
@@ -637,6 +671,9 @@ async def refine_prd(request: RefinePrdRequest):
             detail=error_detail("state_error", f"Failed to persist refined PRD: {exc}"),
         )
 
+    _reset_stage_status(request.thread_id, "prd")
+    _reset_stage_status(request.thread_id, "architecture")
+    _reset_stage_status(request.thread_id, "stories")
     return RefinePrdResponse(prd_draft=updated_prd, is_ready=True)
 
 
@@ -739,6 +776,8 @@ async def generate_architecture(request: GenerateArchitectureRequest):
             detail=error_detail("state_error", f"Failed to persist architecture draft: {exc}"),
         )
 
+    _reset_stage_status(request.thread_id, "architecture")
+    _reset_stage_status(request.thread_id, "stories")
     return GenerateArchitectureResponse(architecture_draft=result)
 
 
@@ -778,6 +817,8 @@ async def update_architecture(thread_id: str, request: UpdateArchitectureRequest
                 f"Failed to persist architecture for thread '{thread_id}': {exc}",
             ),
         )
+    _reset_stage_status(thread_id, "architecture")
+    _reset_stage_status(thread_id, "stories")
     return UpdateArchitectureResponse(success=True, architecture_draft=request.content)
 
 
@@ -917,6 +958,7 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
             detail=error_detail("state_error", f"Failed to persist user stories draft: {exc}"),
         )
 
+    _reset_stage_status(request.thread_id, "stories")
     return GenerateUserStoriesResponse(user_stories_draft=result)
 
 
@@ -949,6 +991,7 @@ async def update_user_stories(thread_id: str, request: UpdateUserStoriesRequest)
                 f"Failed to persist user stories for thread '{thread_id}': {exc}",
             ),
         )
+    _reset_stage_status(thread_id, "stories")
     return UpdateUserStoriesResponse(success=True, user_stories_draft=content)
 
 
@@ -998,6 +1041,7 @@ async def refine_user_stories(request: RefineUserStoriesRequest):
             detail=error_detail("state_error", f"Failed to persist refined user stories: {exc}"),
         )
 
+    _reset_stage_status(request.thread_id, "stories")
     return RefineUserStoriesResponse(user_stories_draft=result)
 
 
@@ -1104,6 +1148,11 @@ async def stage_chat(stage: str, request: StageChatRequest):
         )
         try:
             graph.update_state(main_config, state_update)
+            # Content was updated by AI — reset approval
+            stage_key = "stories" if stage == "stories" else stage
+            _reset_stage_status(thread_id, stage_key)
+            if stage == "architecture":
+                _reset_stage_status(thread_id, "stories")
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
@@ -1388,6 +1437,42 @@ async def get_github_repos(token: str):
             status_code=502,
             detail=error_detail("github_error", str(exc)),
         )
+
+
+# ---------------------------------------------------------------------------
+# Stage status endpoints
+# ---------------------------------------------------------------------------
+
+VALID_STAGE_STATUSES = {"draft", "approved", "needs_revision"}
+
+
+class StageStatusesResponse(BaseModel):
+    prd: str
+    architecture: str
+    stories: str
+
+
+class SetStageStatusRequest(BaseModel):
+    status: str
+
+
+@app.get("/api/stage/statuses/{thread_id}", response_model=StageStatusesResponse)
+async def get_stage_statuses(thread_id: str):
+    return StageStatusesResponse(
+        prd=_get_stage_status(thread_id, "prd"),
+        architecture=_get_stage_status(thread_id, "architecture"),
+        stories=_get_stage_status(thread_id, "stories"),
+    )
+
+
+@app.patch("/api/stage/{stage}/status/{thread_id}")
+async def set_stage_status_endpoint(stage: str, thread_id: str, request: SetStageStatusRequest):
+    if stage not in ("prd", "architecture", "stories"):
+        raise HTTPException(status_code=400, detail=error_detail("invalid_stage", "Invalid stage"))
+    if request.status not in VALID_STAGE_STATUSES:
+        raise HTTPException(status_code=400, detail=error_detail("invalid_status", f"Status must be one of: {sorted(VALID_STAGE_STATUSES)}"))
+    _set_stage_status(thread_id, stage, request.status)
+    return {"stage": stage, "thread_id": thread_id, "status": request.status}
 
 
 # ---------------------------------------------------------------------------
