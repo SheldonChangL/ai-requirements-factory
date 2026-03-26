@@ -73,8 +73,8 @@ def build_user_stories_prompt(prd_draft: str, architecture_draft: str) -> str:
     )
 
 
-def build_story_parse_prompt(user_stories_draft: str) -> str:
+def build_delivery_items_prompt(user_stories_draft: str) -> str:
     return _render_template(
-        _load_prompt_template("story_parse.md"),
+        _load_prompt_template("delivery_items.md"),
         {"USER_STORIES_DRAFT": user_stories_draft},
     )

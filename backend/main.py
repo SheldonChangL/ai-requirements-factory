@@ -1,11 +1,8 @@
 import asyncio
-import base64
 import io
-import json as json_lib
 import os
 import sqlite3
 import urllib.error
-import urllib.request
 from typing import Annotated, TypedDict
 
 import fitz  # PyMuPDF
@@ -20,14 +17,40 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
-from api_errors import error_detail
-from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
-from prompts import (
-    build_architect_prompt,
-    build_sa_prompt,
-    build_story_parse_prompt,
-    build_user_stories_prompt,
-)
+try:
+    from api_errors import error_detail
+    from artifacts import (
+        ProjectArtifacts,
+        delivery_items_to_json,
+        export_project_json,
+        export_project_markdown,
+    )
+    from integrations.jira import list_jira_projects
+    from integrations.registry_map import DELIVERY_INTEGRATIONS
+    from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
+    from prompts import (
+        build_architect_prompt,
+        build_sa_prompt,
+        build_user_stories_prompt,
+    )
+    from workflow import parse_delivery_items, project_artifacts_from_state
+except ModuleNotFoundError:
+    from backend.api_errors import error_detail
+    from backend.artifacts import (
+        ProjectArtifacts,
+        delivery_items_to_json,
+        export_project_json,
+        export_project_markdown,
+    )
+    from backend.integrations.jira import list_jira_projects
+    from backend.integrations.registry_map import DELIVERY_INTEGRATIONS
+    from backend.model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
+    from backend.prompts import (
+        build_architect_prompt,
+        build_sa_prompt,
+        build_user_stories_prompt,
+    )
+    from backend.workflow import parse_delivery_items, project_artifacts_from_state
 
 CORS_ALLOW_ORIGINS = [
     origin.strip()
@@ -155,6 +178,151 @@ app.add_middleware(
 )
 
 VALID_MODEL_CHOICES = set(get_supported_model_choices())
+VALID_DELIVERY_TARGETS = set(DELIVERY_INTEGRATIONS.keys())
+
+
+def validate_model_choice(model_choice: str) -> str:
+    normalized = model_choice.strip().lower()
+    if normalized not in VALID_MODEL_CHOICES:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "invalid_model_choice",
+                f"Invalid model_choice '{normalized}'. "
+                f"Valid options: {sorted(VALID_MODEL_CHOICES)}",
+            ),
+        )
+    return normalized
+
+
+def validate_delivery_target(target: str) -> str:
+    normalized = target.strip().lower()
+    if normalized not in VALID_DELIVERY_TARGETS:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "invalid_delivery_target",
+                f"Invalid delivery target '{normalized}'. "
+                f"Valid options: {sorted(VALID_DELIVERY_TARGETS)}",
+            ),
+        )
+    return normalized
+
+
+def get_thread_values(thread_id: str) -> dict:
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        state_snapshot = graph.get_state(config)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
+        ) from exc
+
+    if state_snapshot is None or not state_snapshot.values:
+        return {}
+    return state_snapshot.values
+
+
+def get_project_artifacts(thread_id: str) -> ProjectArtifacts:
+    return project_artifacts_from_state(thread_id, get_thread_values(thread_id))
+
+
+def require_user_stories(thread_id: str) -> str:
+    artifacts = get_project_artifacts(thread_id)
+    if not artifacts.user_stories:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "missing_user_stories",
+                "User stories must be generated before using delivery integrations.",
+            ),
+        )
+    return artifacts.user_stories
+
+
+def parse_delivery_items_or_raise(thread_id: str, model_choice: str):
+    user_stories_draft = require_user_stories(thread_id)
+    try:
+        return parse_delivery_items(user_stories_draft, model_choice)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "story_parse_error",
+                f"Could not parse model output as JSON: {exc}",
+            ),
+        ) from exc
+    except (RuntimeError, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("model_error", f"Model failed to parse user stories: {exc}"),
+        ) from exc
+
+
+def build_delivery_config(
+    target: str,
+    *,
+    require_credentials: bool = True,
+    jira_domain: str = "",
+    jira_email: str = "",
+    jira_token: str = "",
+    jira_project_key: str = "",
+    github_owner: str = "",
+    github_repo: str = "",
+    github_token: str = "",
+) -> dict[str, str]:
+    if target == "jira":
+        if not jira_project_key.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "invalid_integration_config",
+                    "Jira delivery requires a project key.",
+                ),
+            )
+        if require_credentials and not all([jira_domain.strip(), jira_email.strip(), jira_token.strip()]):
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "invalid_integration_config",
+                    "Jira publish requires domain, email, and API token.",
+                ),
+            )
+        return {
+            "domain": jira_domain.strip(),
+            "email": jira_email.strip(),
+            "token": jira_token.strip(),
+            "project_key": jira_project_key.strip(),
+        }
+
+    if target == "github":
+        if not all([github_owner.strip(), github_repo.strip()]):
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "invalid_integration_config",
+                    "GitHub delivery requires owner and repo.",
+                ),
+            )
+        if require_credentials and not github_token.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "invalid_integration_config",
+                    "GitHub publish requires a personal access token.",
+                ),
+            )
+        return {
+            "owner": github_owner.strip(),
+            "repo": github_repo.strip(),
+            "token": github_token.strip(),
+        }
+
+    raise HTTPException(
+        status_code=400,
+        detail=error_detail("invalid_delivery_target", f"Unsupported target '{target}'."),
+    )
 
 
 class ChatRequest(BaseModel):
@@ -525,155 +693,155 @@ class PushToJiraResponse(BaseModel):
     count: int
 
 
+class PushToGitHubRequest(BaseModel):
+    thread_id: str
+    model_choice: str = "ollama"
+    github_owner: str
+    github_repo: str
+    github_token: str
+
+
+class PushToGitHubResponse(BaseModel):
+    success: bool
+    created_issues: list[str]
+    count: int
+
+
+class DeliveryPreviewRequest(BaseModel):
+    thread_id: str
+    model_choice: str = "ollama"
+    target: str
+    jira_project_key: str = ""
+    github_owner: str = ""
+    github_repo: str = ""
+
+
+class DeliveryPreviewResponse(BaseModel):
+    target: str
+    items: list[dict]
+    payload_preview: list[dict]
+
+
+class DeliveryPublishRequest(BaseModel):
+    thread_id: str
+    model_choice: str = "ollama"
+    target: str
+    jira_domain: str = ""
+    jira_email: str = ""
+    jira_token: str = ""
+    jira_project_key: str = ""
+    github_owner: str = ""
+    github_repo: str = ""
+    github_token: str = ""
+
+
+class DeliveryPublishResponse(BaseModel):
+    success: bool
+    target: str
+    created_items: list[str]
+    count: int
+
+
+@app.post("/api/delivery/preview", response_model=DeliveryPreviewResponse)
+async def preview_delivery(request: DeliveryPreviewRequest):
+    model_choice = validate_model_choice(request.model_choice)
+    target = validate_delivery_target(request.target)
+    parsed_items = parse_delivery_items_or_raise(request.thread_id, model_choice)
+    items = delivery_items_to_json(parsed_items)
+    preview = DELIVERY_INTEGRATIONS[target].preview(
+        parsed_items,
+        build_delivery_config(
+            target,
+            require_credentials=False,
+            jira_project_key=request.jira_project_key,
+            github_owner=request.github_owner,
+            github_repo=request.github_repo,
+        ),
+    )
+    return DeliveryPreviewResponse(target=target, items=items, payload_preview=preview)
+
+
+@app.post("/api/delivery/publish", response_model=DeliveryPublishResponse)
+async def publish_delivery(request: DeliveryPublishRequest):
+    model_choice = validate_model_choice(request.model_choice)
+    target = validate_delivery_target(request.target)
+    items = parse_delivery_items_or_raise(request.thread_id, model_choice)
+    config = build_delivery_config(
+        target,
+        jira_domain=request.jira_domain,
+        jira_email=request.jira_email,
+        jira_token=request.jira_token,
+        jira_project_key=request.jira_project_key,
+        github_owner=request.github_owner,
+        github_repo=request.github_repo,
+        github_token=request.github_token,
+    )
+    try:
+        result = DELIVERY_INTEGRATIONS[target].publish(items, config)
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        category = "jira_api_error" if target == "jira" else "github_api_error"
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail(category, f"{target} API error (HTTP {exc.code}): {error_body}"),
+        ) from exc
+    except urllib.error.URLError as exc:
+        category = "jira_network_error" if target == "jira" else "github_network_error"
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail(category, f"Could not reach {target}: {exc.reason}"),
+        ) from exc
+    except Exception as exc:
+        category = f"{target}_error"
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail(category, str(exc)),
+        ) from exc
+
+    return DeliveryPublishResponse(
+        success=result.success,
+        target=result.target,
+        created_items=result.created,
+        count=result.count,
+    )
+
+
 @app.post("/api/push_to_jira", response_model=PushToJiraResponse)
 async def push_to_jira(request: PushToJiraRequest):
-    """
-    Parse user stories into structured JSON via the AI model, then create
-    Jira issues for each story using the Jira REST API v3.
-    """
-    model_choice = request.model_choice.strip().lower()
-    if model_choice not in VALID_MODEL_CHOICES:
-        raise HTTPException(
-            status_code=400,
-            detail=error_detail(
-                "invalid_model_choice",
-                f"Invalid model_choice '{model_choice}'. "
-                f"Valid options: {sorted(VALID_MODEL_CHOICES)}",
-            ),
+    result = await publish_delivery(
+        DeliveryPublishRequest(
+            thread_id=request.thread_id,
+            model_choice=request.model_choice,
+            target="jira",
+            jira_domain=request.jira_domain,
+            jira_email=request.jira_email,
+            jira_token=request.jira_token,
+            jira_project_key=request.jira_project_key,
         )
-
-    config = {"configurable": {"thread_id": request.thread_id}}
-
-    # Retrieve current state
-    try:
-        state_snapshot = graph.get_state(config)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
-        )
-
-    if state_snapshot is None or not state_snapshot.values:
-        raise HTTPException(
-            status_code=400,
-            detail=error_detail("missing_user_stories", "User stories are not ready yet."),
-        )
-
-    user_stories_draft = state_snapshot.values.get("user_stories_draft", "").strip()
-    if not user_stories_draft:
-        raise HTTPException(
-            status_code=400,
-            detail=error_detail(
-                "missing_user_stories",
-                "User stories must be generated before pushing to Jira.",
-            ),
-        )
-
-    parse_prompt = build_story_parse_prompt(user_stories_draft)
-
-    try:
-        raw_json = await asyncio.to_thread(invoke_model, model_choice, parse_prompt)
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=error_detail("model_error", f"Model failed to parse user stories: {exc}"),
-        )
-
-    # Strip any accidental markdown code fences the model may have added
-    raw_json = raw_json.strip()
-    if raw_json.startswith("```"):
-        lines = raw_json.splitlines()
-        raw_json = "\n".join(
-            line for line in lines if not line.strip().startswith("```")
-        ).strip()
-
-    try:
-        stories: list[dict] = json_lib.loads(raw_json)
-        if not isinstance(stories, list):
-            raise ValueError("Expected a JSON array at the top level.")
-    except (json_lib.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=error_detail(
-                "story_parse_error",
-                f"Could not parse model output as JSON: {exc}. Raw output: {raw_json[:500]}",
-            ),
-        )
-
-    # Step 2: Create Jira issues
-    auth = base64.b64encode(
-        f"{request.jira_email}:{request.jira_token}".encode()
-    ).decode()
-    headers = {
-        "Authorization": f"Basic {auth}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    jira_url = f"https://{request.jira_domain}/rest/api/3/issue"
-
-    created_keys: list[str] = []
-
-    for story in stories:
-        summary = str(story.get("summary", "Untitled Story"))[:80]
-        base_description = str(story.get("description", summary))
-        story_points = story.get("story_points", 3)
-        if not isinstance(story_points, int):
-            try:
-                story_points = int(story_points)
-            except (TypeError, ValueError):
-                story_points = 3
-        description_text = f"{base_description}\n\n**[ Story Points: {story_points} ]**"
-
-        payload = {
-            "fields": {
-                "project": {"key": request.jira_project_key},
-                "summary": summary,
-                "description": {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [
-                        {
-                            "type": "paragraph",
-                            "content": [{"type": "text", "text": description_text}],
-                        }
-                    ],
-                },
-                "issuetype": {"name": "Story"},
-            }
-        }
-
-        req = urllib.request.Request(
-            jira_url,
-            data=json_lib.dumps(payload).encode(),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                result_data = json_lib.loads(resp.read())
-                created_keys.append(result_data["key"])
-        except urllib.error.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", errors="replace")
-            raise HTTPException(
-                status_code=502,
-                detail=error_detail(
-                    "jira_api_error",
-                    f"Jira API error (HTTP {exc.code}): {error_body}",
-                ),
-            )
-        except urllib.error.URLError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=error_detail(
-                    "jira_network_error",
-                    f"Could not reach Jira at '{request.jira_domain}': {exc.reason}",
-                ),
-            )
-
+    )
     return PushToJiraResponse(
-        success=True,
-        created_issues=created_keys,
-        count=len(created_keys),
+        success=result.success,
+        created_issues=result.created_items,
+        count=result.count,
+    )
+
+
+@app.post("/api/push_to_github", response_model=PushToGitHubResponse)
+async def push_to_github(request: PushToGitHubRequest):
+    result = await publish_delivery(
+        DeliveryPublishRequest(
+            thread_id=request.thread_id,
+            model_choice=request.model_choice,
+            target="github",
+            github_owner=request.github_owner,
+            github_repo=request.github_repo,
+            github_token=request.github_token,
+        )
+    )
+    return PushToGitHubResponse(
+        success=result.success,
+        created_issues=result.created_items,
+        count=result.count,
     )
 
 
@@ -697,24 +865,11 @@ async def get_jira_projects(domain: str, email: str, token: str):
     Fetch all accessible Jira projects for the given credentials.
     Returns HTTP 401 on auth failure, HTTP 502 on network/other errors.
     """
-    auth = base64.b64encode(f"{email}:{token}".encode()).decode()
-    url = f"https://{domain}/rest/api/3/project"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Basic {auth}",
-            "Accept": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            projects = json_lib.loads(resp.read())
-            return JiraProjectsResponse(
-                projects=[
-                    JiraProject(key=p["key"], name=p["name"], id=str(p["id"]))
-                    for p in projects
-                ]
-            )
+        projects = list_jira_projects(domain, email, token)
+        return JiraProjectsResponse(
+            projects=[JiraProject(**project) for project in projects]
+        )
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             raise HTTPException(
@@ -783,21 +938,9 @@ async def export_project(thread_id: str, format: str = "markdown"):
     Export the full project document (PRD + Architecture) as a downloadable Markdown file.
     Returns HTTP 400 if both sections are empty.
     """
-    config = {"configurable": {"thread_id": thread_id}}
-    try:
-        state_snapshot = graph.get_state(config)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=error_detail("state_error", f"Failed to retrieve thread state: {exc}"),
-        )
+    artifacts = get_project_artifacts(thread_id)
 
-    values = state_snapshot.values if (state_snapshot and state_snapshot.values) else {}
-    prd_draft = values.get("prd_draft", "").strip()
-    architecture_draft = values.get("architecture_draft", "").strip()
-    user_stories_draft = values.get("user_stories_draft", "").strip()
-
-    if not prd_draft and not architecture_draft and not user_stories_draft:
+    if not artifacts.prd and not artifacts.architecture and not artifacts.user_stories:
         raise HTTPException(
             status_code=400,
             detail=error_detail(
@@ -815,40 +958,11 @@ async def export_project(thread_id: str, format: str = "markdown"):
             ),
         )
 
-    sections: list[str] = [f"# Project: {thread_id}\n"]
-
-    if prd_draft:
-        sections.append("## Product Requirements Document\n")
-        sections.append(prd_draft)
-
-    if prd_draft and architecture_draft:
-        sections.append("\n---\n")
-
-    if architecture_draft:
-        sections.append("## System Architecture\n")
-        sections.append(architecture_draft)
-
-    if (prd_draft or architecture_draft) and user_stories_draft:
-        sections.append("\n---\n")
-
-    if user_stories_draft:
-        sections.append("## User Stories\n")
-        sections.append(user_stories_draft)
-
-    markdown_content = "\n".join(sections)
-
     if format == "json":
-        return JSONResponse(
-            content={
-                "thread_id": thread_id,
-                "prd": prd_draft,
-                "architecture": architecture_draft,
-                "user_stories": user_stories_draft,
-            }
-        )
+        return JSONResponse(content=export_project_json(artifacts))
 
     return Response(
-        content=markdown_content,
+        content=export_project_markdown(artifacts),
         media_type="text/markdown",
         headers={
             "Content-Disposition": f'attachment; filename="{thread_id}-project.md"'
