@@ -29,8 +29,11 @@ try:
     from integrations.registry_map import DELIVERY_INTEGRATIONS
     from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from prompts import (
+        build_architecture_refine_prompt,
         build_architect_prompt,
+        build_prd_refine_prompt,
         build_sa_prompt,
+        build_user_stories_refine_prompt,
         build_user_stories_prompt,
     )
     from workflow import parse_delivery_items, project_artifacts_from_state
@@ -46,8 +49,11 @@ except ModuleNotFoundError:
     from backend.integrations.registry_map import DELIVERY_INTEGRATIONS
     from backend.model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from backend.prompts import (
+        build_architecture_refine_prompt,
         build_architect_prompt,
+        build_prd_refine_prompt,
         build_sa_prompt,
+        build_user_stories_refine_prompt,
         build_user_stories_prompt,
     )
     from backend.workflow import parse_delivery_items, project_artifacts_from_state
@@ -239,6 +245,32 @@ def require_user_stories(thread_id: str) -> str:
             ),
         )
     return artifacts.user_stories
+
+
+def require_prd(thread_id: str) -> str:
+    artifacts = get_project_artifacts(thread_id)
+    if not artifacts.prd:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "missing_prd",
+                "PRD must exist before this stage can be updated.",
+            ),
+        )
+    return artifacts.prd
+
+
+def require_architecture(thread_id: str) -> str:
+    artifacts = get_project_artifacts(thread_id)
+    if not artifacts.architecture:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "missing_architecture",
+                "Architecture must exist before this stage can be updated.",
+            ),
+        )
+    return artifacts.architecture
 
 
 def parse_delivery_items_or_raise(thread_id: str, model_choice: str):
@@ -448,6 +480,99 @@ async def get_thread_state(thread_id: str):
     )
 
 
+class UpdatePrdRequest(BaseModel):
+    content: str
+
+
+class UpdatePrdResponse(BaseModel):
+    success: bool
+    prd_draft: str
+    is_ready: bool
+
+
+@app.put("/api/prd/{thread_id}", response_model=UpdatePrdResponse)
+async def update_prd(thread_id: str, request: UpdatePrdRequest):
+    content = request.content.strip()
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "PRD content cannot be empty."),
+        )
+
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        graph.update_state(
+            config,
+            {
+                "prd_draft": content,
+                "is_ready_for_architecture": True,
+                "architecture_draft": "",
+                "user_stories_draft": "",
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail(
+                "state_error",
+                f"Failed to persist PRD for thread '{thread_id}': {exc}",
+            ),
+        )
+    return UpdatePrdResponse(success=True, prd_draft=content, is_ready=True)
+
+
+class RefinePrdRequest(BaseModel):
+    thread_id: str
+    model_choice: str = "ollama"
+    instruction: str
+
+
+class RefinePrdResponse(BaseModel):
+    prd_draft: str
+    is_ready: bool
+
+
+@app.post("/api/refine_prd", response_model=RefinePrdResponse)
+async def refine_prd(request: RefinePrdRequest):
+    if not request.instruction.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "instruction cannot be empty."),
+        )
+
+    model_choice = validate_model_choice(request.model_choice)
+    existing_prd = require_prd(request.thread_id)
+    prompt = build_prd_refine_prompt(existing_prd, request.instruction.strip())
+
+    try:
+        result = await asyncio.to_thread(invoke_model, model_choice, prompt)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("model_error", f"PRD refine failed: {exc}"),
+        )
+
+    updated_prd = result.replace("[PRD_READY]", "").rstrip()
+    config = {"configurable": {"thread_id": request.thread_id}}
+    try:
+        graph.update_state(
+            config,
+            {
+                "prd_draft": updated_prd,
+                "is_ready_for_architecture": True,
+                "architecture_draft": "",
+                "user_stories_draft": "",
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("state_error", f"Failed to persist refined PRD: {exc}"),
+        )
+
+    return RefinePrdResponse(prd_draft=updated_prd, is_ready=True)
+
+
 class DeleteThreadResponse(BaseModel):
     success: bool
     thread_id: str
@@ -588,6 +713,59 @@ async def update_architecture(thread_id: str, request: UpdateArchitectureRequest
     return UpdateArchitectureResponse(success=True, architecture_draft=request.content)
 
 
+class RefineArchitectureRequest(BaseModel):
+    thread_id: str
+    model_choice: str = "ollama"
+    instruction: str
+
+
+class RefineArchitectureResponse(BaseModel):
+    architecture_draft: str
+
+
+@app.post("/api/refine_architecture", response_model=RefineArchitectureResponse)
+async def refine_architecture(request: RefineArchitectureRequest):
+    if not request.instruction.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "instruction cannot be empty."),
+        )
+
+    model_choice = validate_model_choice(request.model_choice)
+    prd_draft = require_prd(request.thread_id)
+    architecture_draft = require_architecture(request.thread_id)
+    prompt = build_architecture_refine_prompt(
+        prd_draft,
+        architecture_draft,
+        request.instruction.strip(),
+    )
+
+    try:
+        result = await asyncio.to_thread(invoke_model, model_choice, prompt)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("model_error", f"Architecture refine failed: {exc}"),
+        )
+
+    config = {"configurable": {"thread_id": request.thread_id}}
+    try:
+        graph.update_state(
+            config,
+            {
+                "architecture_draft": result,
+                "user_stories_draft": "",
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("state_error", f"Failed to persist refined architecture: {exc}"),
+        )
+
+    return RefineArchitectureResponse(architecture_draft=result)
+
+
 # ---------------------------------------------------------------------------
 # User Stories generation endpoint
 # ---------------------------------------------------------------------------
@@ -672,6 +850,87 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
         )
 
     return GenerateUserStoriesResponse(user_stories_draft=result)
+
+
+class UpdateUserStoriesRequest(BaseModel):
+    content: str
+
+
+class UpdateUserStoriesResponse(BaseModel):
+    success: bool
+    user_stories_draft: str
+
+
+@app.put("/api/user_stories/{thread_id}", response_model=UpdateUserStoriesResponse)
+async def update_user_stories(thread_id: str, request: UpdateUserStoriesRequest):
+    content = request.content.strip()
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "User stories content cannot be empty."),
+        )
+
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        graph.update_state(config, {"user_stories_draft": content})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail(
+                "state_error",
+                f"Failed to persist user stories for thread '{thread_id}': {exc}",
+            ),
+        )
+    return UpdateUserStoriesResponse(success=True, user_stories_draft=content)
+
+
+class RefineUserStoriesRequest(BaseModel):
+    thread_id: str
+    model_choice: str = "ollama"
+    instruction: str
+
+
+class RefineUserStoriesResponse(BaseModel):
+    user_stories_draft: str
+
+
+@app.post("/api/refine_user_stories", response_model=RefineUserStoriesResponse)
+async def refine_user_stories(request: RefineUserStoriesRequest):
+    if not request.instruction.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "instruction cannot be empty."),
+        )
+
+    model_choice = validate_model_choice(request.model_choice)
+    prd_draft = require_prd(request.thread_id)
+    architecture_draft = require_architecture(request.thread_id)
+    user_stories_draft = require_user_stories(request.thread_id)
+    prompt = build_user_stories_refine_prompt(
+        prd_draft,
+        architecture_draft,
+        user_stories_draft,
+        request.instruction.strip(),
+    )
+
+    try:
+        result = await asyncio.to_thread(invoke_model, model_choice, prompt)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("model_error", f"User stories refine failed: {exc}"),
+        )
+
+    config = {"configurable": {"thread_id": request.thread_id}}
+    try:
+        graph.update_state(config, {"user_stories_draft": result})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("state_error", f"Failed to persist refined user stories: {exc}"),
+        )
+
+    return RefineUserStoriesResponse(user_stories_draft=result)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import mermaid from "mermaid";
 
 type ModelChoice = "ollama" | "gemini-cli" | "claude-cli" | "codex-cli";
 type DeliveryTarget = "jira" | "github";
+type WorkspaceStage = "prd" | "architecture" | "stories";
 
 interface Project {
   id: string;
@@ -501,6 +502,12 @@ export default function HomePage() {
   const [error, setError]                 = useState<string | null>(null);
   const [uploadError, setUploadError]     = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [activeWorkspaceStage, setActiveWorkspaceStage] = useState<WorkspaceStage>("prd");
+  const [isEditingPrd, setIsEditingPrd]   = useState(false);
+  const [editingPrdContent, setEditingPrdContent] = useState("");
+  const [isSavingPrd, setIsSavingPrd]     = useState(false);
+  const [prdInstruction, setPrdInstruction] = useState("");
+  const [isRefiningPrd, setIsRefiningPrd] = useState(false);
 
   // ── Architecture state ───────────────────────────────────────────────────
   const [architectureDraft, setArchitectureDraft] = useState("");
@@ -508,10 +515,17 @@ export default function HomePage() {
   const [isEditingArch, setIsEditingArch]         = useState(false);
   const [editingArchContent, setEditingArchContent] = useState("");
   const [isSavingArch, setIsSavingArch]           = useState(false);
+  const [architectureInstruction, setArchitectureInstruction] = useState("");
+  const [isRefiningArchitecture, setIsRefiningArchitecture] = useState(false);
 
   // ── User Stories state ───────────────────────────────────────────────────
   const [userStoriesDraft, setUserStoriesDraft]       = useState("");
   const [isGeneratingStories, setIsGeneratingStories] = useState(false);
+  const [isEditingStories, setIsEditingStories]       = useState(false);
+  const [editingStoriesContent, setEditingStoriesContent] = useState("");
+  const [isSavingStories, setIsSavingStories]         = useState(false);
+  const [storiesInstruction, setStoriesInstruction]   = useState("");
+  const [isRefiningStories, setIsRefiningStories]     = useState(false);
 
   // ── Jira state ───────────────────────────────────────────────────────────
   const [jiraConfig, setJiraConfig]               = useState<JiraConfig>({ domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" });
@@ -586,6 +600,13 @@ export default function HomePage() {
       setIsReady(false);
       setArchitectureDraft("");
       setUserStoriesDraft("");
+      setActiveWorkspaceStage("prd");
+      setIsEditingPrd(false);
+      setIsEditingArch(false);
+      setIsEditingStories(false);
+      setPrdInstruction("");
+      setArchitectureInstruction("");
+      setStoriesInstruction("");
       setAmendmentBannerDismissed(false);
       return;
     }
@@ -599,7 +620,13 @@ export default function HomePage() {
     setIsReady(false);
     setArchitectureDraft("");
     setUserStoriesDraft("");
+    setActiveWorkspaceStage("prd");
+    setIsEditingPrd(false);
     setIsEditingArch(false);
+    setIsEditingStories(false);
+    setPrdInstruction("");
+    setArchitectureInstruction("");
+    setStoriesInstruction("");
     setError(null);
 
     fetch(`${API_BASE}/api/chat/${activeThreadId}`, { signal: controller.signal })
@@ -618,6 +645,13 @@ export default function HomePage() {
         setIsReady(data.is_ready ?? false);
         setArchitectureDraft(data.architecture_draft ?? "");
         setUserStoriesDraft(data.user_stories_draft ?? "");
+        if (data.user_stories_draft) {
+          setActiveWorkspaceStage("stories");
+        } else if (data.architecture_draft) {
+          setActiveWorkspaceStage("architecture");
+        } else {
+          setActiveWorkspaceStage("prd");
+        }
       })
       .catch(() => {
         setMessages([]);
@@ -670,6 +704,7 @@ export default function HomePage() {
     setUploadError(null);
     setDeliveryPushResult(null);
     setDeliveryErrorMsg(null);
+    setActiveWorkspaceStage("prd");
     setAmendmentBannerDismissed(false);
   };
 
@@ -694,6 +729,7 @@ export default function HomePage() {
       setIsReady(false);
       setArchitectureDraft("");
       setUserStoriesDraft("");
+      setActiveWorkspaceStage("prd");
       setError(null);
     }
   };
@@ -719,6 +755,10 @@ export default function HomePage() {
     setIsReady(false);
     setArchitectureDraft("");
     setUserStoriesDraft("");
+    setIsEditingPrd(false);
+    setIsEditingArch(false);
+    setIsEditingStories(false);
+    setActiveWorkspaceStage("prd");
     setMessages((prev) => [
       ...prev,
       {
@@ -749,6 +789,65 @@ export default function HomePage() {
     }
   };
 
+  const handleSavePrd = async () => {
+    if (!activeThreadId || !editingPrdContent.trim()) return;
+    setIsSavingPrd(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/prd/${activeThreadId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editingPrdContent }),
+      });
+      if (!res.ok) {
+        await throwApiError(res);
+      }
+      const data = await res.json();
+      setPrdDraft(data.prd_draft);
+      setIsReady(data.is_ready);
+      setArchitectureDraft("");
+      setUserStoriesDraft("");
+      setIsEditingPrd(false);
+      setActiveWorkspaceStage("prd");
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to save PRD");
+    } finally {
+      setIsSavingPrd(false);
+    }
+  };
+
+  const handleRefinePrd = async () => {
+    if (!activeThreadId || !prdInstruction.trim()) return;
+    setIsRefiningPrd(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/refine_prd`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread_id: activeThreadId,
+          model_choice: modelChoice,
+          instruction: prdInstruction,
+        }),
+      });
+      if (!res.ok) {
+        await throwApiError(res);
+      }
+      const data = await res.json();
+      setPrdDraft(data.prd_draft);
+      setIsReady(data.is_ready);
+      setArchitectureDraft("");
+      setUserStoriesDraft("");
+      setPrdInstruction("");
+      setActiveWorkspaceStage("prd");
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to refine PRD");
+    } finally {
+      setIsRefiningPrd(false);
+    }
+  };
+
   // ── Generate Architecture ────────────────────────────────────────────────
   const handleGenerateArchitecture = async () => {
     if (!activeThreadId) return;
@@ -763,6 +862,7 @@ export default function HomePage() {
       if (!res.ok) throw new Error("Failed");
       const data = await res.json();
       setArchitectureDraft(data.architecture_draft);
+      setActiveWorkspaceStage("architecture");
     } catch (e) {
       console.error(e);
     } finally {
@@ -784,10 +884,42 @@ export default function HomePage() {
       setArchitectureDraft(editingArchContent);
       setUserStoriesDraft("");
       setIsEditingArch(false);
+      setActiveWorkspaceStage("architecture");
     } catch (e) {
       console.error(e);
     } finally {
       setIsSavingArch(false);
+    }
+  };
+
+  const handleRefineArchitecture = async () => {
+    if (!activeThreadId || !architectureInstruction.trim()) return;
+    setIsRefiningArchitecture(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/refine_architecture`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread_id: activeThreadId,
+          model_choice: modelChoice,
+          instruction: architectureInstruction,
+        }),
+      });
+      if (!res.ok) {
+        await throwApiError(res);
+      }
+      const data = await res.json();
+      setArchitectureDraft(data.architecture_draft);
+      setUserStoriesDraft("");
+      setArchitectureInstruction("");
+      setIsEditingArch(false);
+      setActiveWorkspaceStage("architecture");
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to refine architecture");
+    } finally {
+      setIsRefiningArchitecture(false);
     }
   };
 
@@ -817,10 +949,76 @@ export default function HomePage() {
       if (!res.ok) throw new Error("Failed");
       const data = await res.json();
       setUserStoriesDraft(data.user_stories_draft);
+      setActiveWorkspaceStage("stories");
     } catch (e) {
       console.error(e);
     } finally {
       setIsGeneratingStories(false);
+    }
+  };
+
+  const handleRegenerateUserStories = async () => {
+    if (!activeThreadId) return;
+    const confirmed = window.confirm(
+      "Regenerate user stories? This will replace the current user stories draft."
+    );
+    if (!confirmed) return;
+    setUserStoriesDraft("");
+    setIsEditingStories(false);
+    await handleGenerateUserStories();
+  };
+
+  const handleSaveUserStories = async () => {
+    if (!activeThreadId || !editingStoriesContent.trim()) return;
+    setIsSavingStories(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/user_stories/${activeThreadId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editingStoriesContent }),
+      });
+      if (!res.ok) {
+        await throwApiError(res);
+      }
+      const data = await res.json();
+      setUserStoriesDraft(data.user_stories_draft);
+      setIsEditingStories(false);
+      setActiveWorkspaceStage("stories");
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to save user stories");
+    } finally {
+      setIsSavingStories(false);
+    }
+  };
+
+  const handleRefineUserStories = async () => {
+    if (!activeThreadId || !storiesInstruction.trim()) return;
+    setIsRefiningStories(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/refine_user_stories`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread_id: activeThreadId,
+          model_choice: modelChoice,
+          instruction: storiesInstruction,
+        }),
+      });
+      if (!res.ok) {
+        await throwApiError(res);
+      }
+      const data = await res.json();
+      setUserStoriesDraft(data.user_stories_draft);
+      setStoriesInstruction("");
+      setIsEditingStories(false);
+      setActiveWorkspaceStage("stories");
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to refine user stories");
+    } finally {
+      setIsRefiningStories(false);
     }
   };
 
@@ -1036,6 +1234,41 @@ export default function HomePage() {
 
   // Whether the export button should be shown
   const canExport = !!activeThreadId && (!!prdDraft || !!architectureDraft || !!userStoriesDraft);
+  const activeStageTitle =
+    activeWorkspaceStage === "prd"
+      ? "PRD"
+      : activeWorkspaceStage === "architecture"
+      ? "Architecture"
+      : "User Stories";
+  const stageCards: {
+    key: WorkspaceStage;
+    title: string;
+    subtitle: string;
+    ready: boolean;
+    accent: string;
+  }[] = [
+    {
+      key: "prd",
+      title: "PRD",
+      subtitle: isReady ? "Ready for downstream work" : prdDraft ? "Draft in progress" : "Waiting for requirements",
+      ready: !!prdDraft,
+      accent: "from-amber-500 to-orange-500",
+    },
+    {
+      key: "architecture",
+      title: "Architecture",
+      subtitle: architectureDraft ? "Technical design ready" : isReady ? "Ready to generate" : "Blocked by PRD",
+      ready: !!architectureDraft,
+      accent: "from-indigo-500 to-violet-500",
+    },
+    {
+      key: "stories",
+      title: "User Stories",
+      subtitle: userStoriesDraft ? "Delivery planning ready" : architectureDraft ? "Ready to generate" : "Blocked by architecture",
+      ready: !!userStoriesDraft,
+      accent: "from-emerald-500 to-teal-500",
+    },
+  ];
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
@@ -1480,425 +1713,482 @@ export default function HomePage() {
       </div>
 
       {/* ================================================================ */}
-      {/* RIGHT PANE — PRD + ARCHITECTURE                                   */}
+      {/* RIGHT PANE — WORKSPACE                                            */}
       {/* ================================================================ */}
       <div className="flex flex-col flex-1 bg-zinc-900 min-w-0">
-
-        {/* ── Right pane header ────────────────────────────────────────── */}
         <div className="relative border-b border-zinc-800 shrink-0">
           <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent" />
-          <div className="flex items-center justify-between px-5 py-3">
-            {/* Left: title */}
-            <div className="flex items-center gap-2.5">
-              <svg className="w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <h2 className="text-sm font-semibold text-zinc-300 tracking-wide uppercase">
-                PRD Preview
-              </h2>
-            </div>
-
-            {/* Right: status badges + action buttons */}
-            <div className="flex items-center gap-2 flex-wrap justify-end">
-              {/* In Progress badge */}
-              {prdDraft && !isReady && (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-950/60 border border-amber-700/50 rounded-full text-xs text-amber-400 font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                  In Progress
-                </span>
-              )}
-
-              {/* PRD Finalized badge + Edit PRD button */}
-              {isReady && (
-                <>
-                  <span className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/60 border border-emerald-700/60 rounded-full text-xs font-semibold text-emerald-400 shadow-sm shadow-emerald-900/30 ring-1 ring-emerald-500/20">
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd"
-                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                        clipRule="evenodd" />
-                    </svg>
-                    PRD Finalized
-                  </span>
-
-                  {/* Edit PRD button */}
-                  <button
-                    type="button"
-                    onClick={handleResetPrd}
-                    disabled={isResettingPrd}
-                    title="Reset PRD and re-enter clarification phase"
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 border border-zinc-600 hover:border-amber-600/60 hover:bg-amber-950/30 rounded-full text-xs text-zinc-400 hover:text-amber-300 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isResettingPrd ? (
-                      <Spinner className="w-3 h-3" />
-                    ) : (
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    )}
-                    ✏️ Edit PRD
-                  </button>
-                </>
-              )}
-
-              {/* Export button — shown whenever there is content to export */}
+          <div className="px-5 py-4 space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.24em] text-zinc-500">Workspace</p>
+                <h2 className="text-base font-semibold text-zinc-100">{activeStageTitle}</h2>
+              </div>
               {canExport && (
                 <button
                   type="button"
                   onClick={handleExport}
                   disabled={isExporting}
-                  title="Download project document as Markdown"
-                  className="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 border border-zinc-600 hover:border-indigo-500/60 hover:bg-indigo-950/30 rounded-full text-xs text-zinc-400 hover:text-indigo-300 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-3 py-2 bg-zinc-800 border border-zinc-700 hover:border-indigo-500/60 hover:bg-indigo-950/30 rounded-lg text-xs text-zinc-300 transition-colors disabled:opacity-50"
                 >
-                  {isExporting ? (
-                    <Spinner className="w-3 h-3" />
-                  ) : (
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                  )}
-                  📥 Export
+                  {isExporting ? <Spinner className="w-3 h-3" /> : null}
+                  Export Project
                 </button>
               )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              {stageCards.map((stage) => (
+                <button
+                  key={stage.key}
+                  type="button"
+                  onClick={() => setActiveWorkspaceStage(stage.key)}
+                  className={`rounded-2xl border px-4 py-3 text-left transition-all ${
+                    activeWorkspaceStage === stage.key
+                      ? "border-zinc-500 bg-zinc-800/90 shadow-lg shadow-black/20"
+                      : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-700 hover:bg-zinc-800/60"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-100">{stage.title}</p>
+                      <p className="mt-1 text-xs text-zinc-500">{stage.subtitle}</p>
+                    </div>
+                    <span className={`inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${stage.accent} text-[11px] font-bold text-white`}>
+                      {stage.key === "prd" ? "PRD" : stage.key === "architecture" ? "ARC" : "USR"}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2 text-[11px] text-zinc-500">
+                    <span className={`h-2 w-2 rounded-full ${stage.ready ? "bg-emerald-400" : "bg-zinc-700"}`} />
+                    {stage.ready ? "Available" : "Pending"}
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
-        {/* PRD + Architecture scrollable content */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {activeWorkspaceStage === "prd" && (
+            <div className="space-y-5">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-zinc-100">PRD Workspace</h3>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${isReady ? "border border-emerald-700/50 bg-emerald-950/60 text-emerald-300" : prdDraft ? "border border-amber-700/50 bg-amber-950/60 text-amber-300" : "border border-zinc-700 bg-zinc-800 text-zinc-400"}`}>
+                    {isReady ? "Ready" : prdDraft ? "Draft" : "Empty"}
+                  </span>
+                  <div className="ml-auto flex flex-wrap gap-2">
+                    {prdDraft && !isEditingPrd && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingPrdContent(prdDraft);
+                          setIsEditingPrd(true);
+                        }}
+                        className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-amber-600/60 hover:text-amber-300"
+                      >
+                        Edit Directly
+                      </button>
+                    )}
+                    {prdDraft && (
+                      <button
+                        type="button"
+                        onClick={handleResetPrd}
+                        disabled={isResettingPrd}
+                        className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-red-600/60 hover:text-red-300 disabled:opacity-50"
+                      >
+                        {isResettingPrd ? "Resetting…" : "Reset PRD"}
+                      </button>
+                    )}
+                  </div>
+                </div>
 
-          {/* PRD content */}
-          {prdDraft ? (
-            <div className="prose prose-invert prose-sm max-w-none">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={prdMarkdownComponents as never}
-              >
-                {prdDraft}
-              </ReactMarkdown>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-16 gap-4 text-center select-none">
-              <div className="w-16 h-16 rounded-2xl bg-zinc-800/60 border border-zinc-700/50 flex items-center justify-center">
-                <svg className="w-8 h-8 text-zinc-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
+                {prdDraft ? (
+                  <p className="mt-2 text-xs text-zinc-500">
+                    This stage owns scope and requirements. Any PRD revision will clear downstream Architecture and User Stories.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-zinc-500">
+                    Use the chat on the left to clarify requirements. Once the PRD appears, you can revise it here stage-by-stage.
+                  </p>
+                )}
               </div>
-              <div>
-                <p className="text-zinc-500 font-medium text-sm">
-                  {activeThreadId ? "Waiting for requirement clarification…" : "No project selected"}
-                </p>
-                <p className="text-zinc-700 text-xs mt-1 max-w-xs">
-                  {activeThreadId
-                    ? "The PRD will appear here once the SA Agent has gathered sufficient information."
-                    : "Select a project from the sidebar to view its PRD."}
-                </p>
-              </div>
-              <div className="flex gap-1.5 mt-1">
-                <div className="w-1.5 h-1.5 rounded-full bg-zinc-800" />
-                <div className="w-1.5 h-1.5 rounded-full bg-zinc-800" />
-                <div className="w-1.5 h-1.5 rounded-full bg-zinc-800" />
+
+              {prdDraft && (
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-zinc-100">AI Revision</h4>
+                      <p className="mt-1 text-xs text-zinc-500">Ask AI to revise only the PRD. Example: add audit log requirements, remove offline mode, split admin roles.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRefinePrd}
+                      disabled={isRefiningPrd || !prdInstruction.trim()}
+                      className="rounded-lg bg-gradient-to-r from-amber-600 to-orange-500 px-4 py-2 text-xs font-semibold text-white transition-all disabled:cursor-not-allowed disabled:from-zinc-700 disabled:to-zinc-700"
+                    >
+                      {isRefiningPrd ? "Applying…" : "Apply PRD Revision"}
+                    </button>
+                  </div>
+                  <textarea
+                    value={prdInstruction}
+                    onChange={(e) => setPrdInstruction(e.target.value)}
+                    rows={4}
+                    placeholder="Describe what to change in the PRD for this stage only…"
+                    className="mt-4 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                  />
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-5">
+                {isEditingPrd ? (
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+                      Saving PRD changes will clear Architecture and User Stories because they depend on this stage.
+                    </div>
+                    <textarea
+                      value={editingPrdContent}
+                      onChange={(e) => setEditingPrdContent(e.target.value)}
+                      rows={24}
+                      className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 font-mono text-sm text-zinc-100 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingPrd(false)}
+                        className="rounded-lg bg-zinc-800 px-4 py-2 text-sm text-zinc-300"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSavePrd}
+                        disabled={isSavingPrd || !editingPrdContent.trim()}
+                        className="rounded-lg bg-gradient-to-r from-amber-600 to-orange-500 px-5 py-2 text-sm font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
+                      >
+                        {isSavingPrd ? "Saving…" : "Save PRD"}
+                      </button>
+                    </div>
+                  </div>
+                ) : prdDraft ? (
+                  <div className="prose prose-invert prose-sm max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
+                      {prdDraft}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                    <p className="text-sm font-medium text-zinc-400">No PRD yet</p>
+                    <p className="max-w-sm text-xs text-zinc-600">Start with the chat on the left. This panel becomes the dedicated PRD workspace once requirements are captured.</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          {/* ── Architecture Section ──────────────────────────────────── */}
-          {activeThreadId && (
-            <>
-              {/* Divider between PRD and Architecture */}
-              {prdDraft && (
-                <div className="border-t border-zinc-800/80" />
-              )}
-
-              {/* State 1: PRD ready, no architecture yet, not generating */}
-              {isReady && architectureDraft === "" && !isGeneratingArch && (
-                <div className="flex flex-col items-center gap-4 py-8 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-indigo-950/60 border border-indigo-800/50 flex items-center justify-center">
-                    <svg className="w-7 h-7 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                        d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-zinc-200">PRD Approved</p>
-                    <p className="text-xs text-zinc-500 mt-1 max-w-xs">
-                      The requirements document is finalized. Click below to have the Architect Agent design the system.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleGenerateArchitecture}
-                    className="flex items-center gap-2.5 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-indigo-900/40 ring-1 ring-indigo-500/30"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                    🏗️ Approve PRD &amp; Generate Architecture
-                  </button>
-                </div>
-              )}
-
-              {/* State 2: Generating */}
-              {isGeneratingArch && (
-                <div className="flex flex-col items-center gap-3 py-10 text-center">
-                  <Spinner className="w-7 h-7 text-indigo-400" />
-                  <p className="text-sm text-zinc-400 font-medium">Architect is designing the system…</p>
-                  <p className="text-xs text-zinc-600">This may take a minute.</p>
-                </div>
-              )}
-
-              {/* State 3: Architecture draft ready */}
-              {architectureDraft !== "" && !isGeneratingArch && (
-                <div>
-                  {/* Section header */}
-                  <div className="flex items-center gap-2.5 mb-4 flex-wrap">
-                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center shrink-0 shadow-md shadow-indigo-900/40">
-                      <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                          d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18" />
-                      </svg>
-                    </div>
-                    <h3 className="text-sm font-bold text-zinc-100 tracking-wide uppercase">
-                      System Architecture
-                    </h3>
-
-                    {/* ✏️ Edit button */}
-                    {!isEditingArch && (
-                      <button
-                        type="button"
-                        onClick={() => { setEditingArchContent(architectureDraft); setIsEditingArch(true); }}
-                        title="Edit architecture manually"
-                        className="flex items-center gap-1 px-2.5 py-1 bg-zinc-700/60 border border-zinc-600 hover:border-amber-600/60 hover:bg-amber-950/30 rounded-lg text-xs text-zinc-400 hover:text-amber-300 font-medium transition-all"
-                      >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                        ✏️ Edit
-                      </button>
-                    )}
-
-                    {/* 🔄 Regenerate button */}
-                    {!isEditingArch && (
-                      <button
-                        type="button"
-                        onClick={handleRegenerateArchitecture}
-                        title="Regenerate architecture from PRD"
-                        className="flex items-center gap-1 px-2.5 py-1 bg-zinc-700/60 border border-zinc-600 hover:border-indigo-500/60 hover:bg-indigo-950/30 rounded-lg text-xs text-zinc-400 hover:text-indigo-300 font-medium transition-all"
-                      >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        🔄 Regenerate
-                      </button>
-                    )}
-
-                    <span className="ml-auto flex items-center gap-1.5 px-2.5 py-1 bg-violet-950/60 border border-violet-700/50 rounded-full text-xs text-violet-300 font-medium">
-                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd"
-                          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                          clipRule="evenodd" />
-                      </svg>
-                      {isEditingArch ? "Editing" : "Generated"}
-                    </span>
-                  </div>
-
-                  {/* Edit mode */}
-                  {isEditingArch ? (
-                    <div className="space-y-3">
-                      {/* Amber warning */}
-                      <div className="flex items-center gap-2 px-3 py-2 bg-amber-950/40 border border-amber-700/50 rounded-lg text-xs text-amber-300">
-                        <svg className="w-3.5 h-3.5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd"
-                            d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                            clipRule="evenodd" />
-                        </svg>
-                        ⚠️ Editing architecture will clear the generated User Stories.
-                      </div>
-
-                      <textarea
-                        value={editingArchContent}
-                        onChange={(e) => setEditingArchContent(e.target.value)}
-                        rows={20}
-                        className="w-full bg-zinc-900 border border-zinc-600 rounded-xl px-4 py-3 text-sm text-zinc-100 font-mono leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                      />
-
-                      {/* Save / Cancel */}
-                      <div className="flex justify-end gap-2">
+          {activeWorkspaceStage === "architecture" && (
+            <div className="space-y-5">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-zinc-100">Architecture Workspace</h3>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${architectureDraft ? "border border-violet-700/50 bg-violet-950/60 text-violet-300" : isReady ? "border border-indigo-700/50 bg-indigo-950/60 text-indigo-300" : "border border-zinc-700 bg-zinc-800 text-zinc-400"}`}>
+                    {architectureDraft ? "Generated" : isReady ? "Ready to generate" : "Blocked"}
+                  </span>
+                  <div className="ml-auto flex flex-wrap gap-2">
+                    {architectureDraft && !isEditingArch && (
+                      <>
                         <button
                           type="button"
-                          onClick={() => setIsEditingArch(false)}
-                          className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-700/50 hover:bg-zinc-700 rounded-lg transition-colors"
+                          onClick={() => {
+                            setEditingArchContent(architectureDraft);
+                            setIsEditingArch(true);
+                          }}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-amber-600/60 hover:text-amber-300"
                         >
-                          ✕ Cancel
+                          Edit Directly
                         </button>
                         <button
                           type="button"
-                          onClick={handleSaveArchitecture}
-                          disabled={isSavingArch}
-                          className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-indigo-900/30"
+                          onClick={handleRegenerateArchitecture}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-indigo-500/60 hover:text-indigo-300"
                         >
-                          {isSavingArch ? <Spinner className="w-3.5 h-3.5" /> : null}
-                          💾 Save
+                          Regenerate
                         </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="prose prose-invert prose-sm max-w-none">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={prdMarkdownComponents as never}
-                      >
-                        {architectureDraft}
-                      </ReactMarkdown>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ── User Stories Section ──────────────────────────────── */}
-              {/* Divider between Architecture and User Stories */}
-              {architectureDraft !== "" && (
-                <div className="border-t border-zinc-800/80" />
-              )}
-
-              {/* State 1: Architecture ready, no user stories yet, not generating */}
-              {architectureDraft !== "" && userStoriesDraft === "" && !isGeneratingStories && (
-                <div className="flex flex-col items-center gap-4 py-8 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-emerald-950/60 border border-emerald-800/50 flex items-center justify-center">
-                    <svg className="w-7 h-7 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-zinc-200">Architecture Approved</p>
-                    <p className="text-xs text-zinc-500 mt-1 max-w-xs">
-                      The system design is ready. Click below to have the User Story Agent generate epics and stories.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleGenerateUserStories}
-                    className="flex items-center gap-2.5 px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-emerald-900/40 ring-1 ring-emerald-500/30"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                    </svg>
-                    📋 Generate User Stories
-                  </button>
-                </div>
-              )}
-
-              {/* State 2: Generating user stories */}
-              {isGeneratingStories && (
-                <div className="flex flex-col items-center gap-3 py-10 text-center">
-                  <Spinner className="w-7 h-7 text-emerald-400" />
-                  <p className="text-sm text-zinc-400 font-medium">Writing user stories and acceptance criteria…</p>
-                  <p className="text-xs text-zinc-600">This may take a minute.</p>
-                </div>
-              )}
-
-              {/* State 3: User stories draft ready */}
-              {userStoriesDraft !== "" && !isGeneratingStories && (
-                <div>
-                  {/* Section header */}
-                  <div className="flex items-center gap-2.5 mb-4">
-                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-600 to-teal-600 flex items-center justify-center shrink-0 shadow-md shadow-emerald-900/40">
-                      <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                      </svg>
-                    </div>
-                    <h3 className="text-sm font-bold text-zinc-100 tracking-wide uppercase">
-                      User Stories
-                    </h3>
-                    <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-950/60 border border-emerald-700/50 rounded-full text-xs text-emerald-300 font-medium">
-                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd"
-                          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                          clipRule="evenodd" />
-                      </svg>
-                      Generated
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => openDeliveryModal("jira")}
-                      disabled={isPublishingDelivery}
-                      title="Push user stories to Jira"
-                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-blue-900/60 border border-blue-700/60 hover:bg-blue-800/60 hover:border-blue-500/70 rounded-lg text-xs text-blue-300 font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isPublishingDelivery && deliveryTarget === "jira" ? (
-                        <Spinner className="w-3 h-3" />
-                      ) : (
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                        </svg>
-                      )}
-                      📤 Push to Jira
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openDeliveryModal("github")}
-                      disabled={isPublishingDelivery}
-                      title="Create GitHub issues from user stories"
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900/70 border border-zinc-600 hover:bg-zinc-800 hover:border-zinc-400 rounded-lg text-xs text-zinc-200 font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isPublishingDelivery && deliveryTarget === "github" ? (
-                        <Spinner className="w-3 h-3" />
-                      ) : (
-                        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                          <path d="M12 .5C5.648.5.5 5.648.5 12a11.5 11.5 0 008 10.938c.6.112.82-.262.82-.582 0-.288-.01-1.05-.016-2.062-3.252.706-3.938-1.568-3.938-1.568-.532-1.35-1.3-1.71-1.3-1.71-1.062-.726.08-.712.08-.712 1.174.082 1.792 1.206 1.792 1.206 1.044 1.79 2.738 1.272 3.406.972.106-.756.41-1.272.744-1.564-2.596-.296-5.326-1.298-5.326-5.776 0-1.276.456-2.32 1.204-3.138-.12-.296-.522-1.49.114-3.106 0 0 .982-.314 3.218 1.2A11.2 11.2 0 0112 6.174c.996.004 2 .134 2.938.394 2.234-1.514 3.214-1.2 3.214-1.2.638 1.616.236 2.81.116 3.106.75.818 1.202 1.862 1.202 3.138 0 4.49-2.734 5.476-5.338 5.766.42.362.794 1.078.794 2.172 0 1.568-.014 2.832-.014 3.218 0 .322.216.698.826.58A11.502 11.502 0 0023.5 12C23.5 5.648 18.352.5 12 .5z" />
-                        </svg>
-                      )}
-                      Create GitHub Issues
-                    </button>
-                  </div>
-
-                  {deliveryPushResult && (
-                    <div className="mb-4 flex items-start gap-2 bg-blue-950/50 border border-blue-700/50 rounded-xl px-4 py-3 text-sm">
-                      <svg className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd"
-                          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                          clipRule="evenodd" />
-                      </svg>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-blue-300 font-semibold">
-                          {deliveryPushResult.count} item{deliveryPushResult.count !== 1 ? "s" : ""} published to {deliveryPushResult.target === "jira" ? "Jira" : "GitHub"}
-                        </p>
-                        <p className="text-blue-500 text-xs mt-0.5 font-mono break-all">
-                          {deliveryPushResult.items.join(" · ")}
-                        </p>
-                      </div>
+                      </>
+                    )}
+                    {!architectureDraft && isReady && !isGeneratingArch && (
                       <button
                         type="button"
-                        onClick={() => setDeliveryPushResult(null)}
-                        className="shrink-0 text-blue-600 hover:text-blue-300 transition-colors"
-                        aria-label="Dismiss"
+                        onClick={handleGenerateArchitecture}
+                        className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white"
                       >
-                        ×
+                        Generate Architecture
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!isReady ? (
+                  <p className="mt-2 text-xs text-zinc-500">Finalize the PRD first. Architecture is intentionally isolated so you can revise it without mixing it into PRD preview.</p>
+                ) : architectureDraft ? (
+                  <p className="mt-2 text-xs text-zinc-500">This stage owns technical design. Updating architecture clears User Stories because the delivery plan depends on it.</p>
+                ) : (
+                  <p className="mt-2 text-xs text-zinc-500">The PRD is ready. Generate architecture here when you want to move into solution design.</p>
+                )}
+              </div>
+
+              {architectureDraft && !isEditingArch && (
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-zinc-100">AI Revision</h4>
+                      <p className="mt-1 text-xs text-zinc-500">Ask AI to revise only the architecture. Example: switch to event-driven processing, add Redis cache, split API and worker services.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRefineArchitecture}
+                      disabled={isRefiningArchitecture || !architectureInstruction.trim()}
+                      className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
+                    >
+                      {isRefiningArchitecture ? "Applying…" : "Apply Architecture Revision"}
+                    </button>
+                  </div>
+                  <textarea
+                    value={architectureInstruction}
+                    onChange={(e) => setArchitectureInstruction(e.target.value)}
+                    rows={4}
+                    placeholder="Describe how this architecture should change…"
+                    className="mt-4 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  />
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-5">
+                {isGeneratingArch ? (
+                  <div className="flex flex-col items-center gap-3 py-12 text-center">
+                    <Spinner className="w-7 h-7 text-indigo-400" />
+                    <p className="text-sm text-zinc-300">Architect is designing the system…</p>
+                  </div>
+                ) : isEditingArch ? (
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+                      Saving architecture changes will clear User Stories.
+                    </div>
+                    <textarea
+                      value={editingArchContent}
+                      onChange={(e) => setEditingArchContent(e.target.value)}
+                      rows={24}
+                      className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 font-mono text-sm text-zinc-100 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingArch(false)}
+                        className="rounded-lg bg-zinc-800 px-4 py-2 text-sm text-zinc-300"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveArchitecture}
+                        disabled={isSavingArch || !editingArchContent.trim()}
+                        className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2 text-sm font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
+                      >
+                        {isSavingArch ? "Saving…" : "Save Architecture"}
                       </button>
                     </div>
-                  )}
-
+                  </div>
+                ) : architectureDraft ? (
                   <div className="prose prose-invert prose-sm max-w-none">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={prdMarkdownComponents as never}
-                    >
-                      {userStoriesDraft}
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
+                      {architectureDraft}
                     </ReactMarkdown>
                   </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                    <p className="text-sm font-medium text-zinc-400">{isReady ? "Architecture not generated yet" : "Architecture is blocked"}</p>
+                    <p className="max-w-sm text-xs text-zinc-600">
+                      {isReady
+                        ? "Generate architecture from the finalized PRD in this workspace."
+                        : "This stage becomes available after the PRD is ready."}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeWorkspaceStage === "stories" && (
+            <div className="space-y-5">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-zinc-100">User Stories Workspace</h3>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${userStoriesDraft ? "border border-emerald-700/50 bg-emerald-950/60 text-emerald-300" : architectureDraft ? "border border-teal-700/50 bg-teal-950/60 text-teal-300" : "border border-zinc-700 bg-zinc-800 text-zinc-400"}`}>
+                    {userStoriesDraft ? "Generated" : architectureDraft ? "Ready to generate" : "Blocked"}
+                  </span>
+                  <div className="ml-auto flex flex-wrap gap-2">
+                    {userStoriesDraft && !isEditingStories && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingStoriesContent(userStoriesDraft);
+                            setIsEditingStories(true);
+                          }}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-amber-600/60 hover:text-amber-300"
+                        >
+                          Edit Directly
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRegenerateUserStories}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-emerald-500/60 hover:text-emerald-300"
+                        >
+                          Regenerate
+                        </button>
+                      </>
+                    )}
+                    {!userStoriesDraft && architectureDraft && !isGeneratingStories && (
+                      <button
+                        type="button"
+                        onClick={handleGenerateUserStories}
+                        className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-xs font-semibold text-white"
+                      >
+                        Generate User Stories
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!architectureDraft ? (
+                  <p className="mt-2 text-xs text-zinc-500">Generate or revise Architecture first. This stage is reserved for delivery planning, not mixed into technical design.</p>
+                ) : userStoriesDraft ? (
+                  <p className="mt-2 text-xs text-zinc-500">This stage owns the delivery-ready backlog. You can refine stories here before pushing them to Jira or GitHub.</p>
+                ) : (
+                  <p className="mt-2 text-xs text-zinc-500">Architecture is ready. Generate the initial user stories set here.</p>
+                )}
+              </div>
+
+              {userStoriesDraft && !isEditingStories && (
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-zinc-100">AI Revision</h4>
+                      <p className="mt-1 text-xs text-zinc-500">Ask AI to revise only the user stories. Example: add admin stories, split large stories, tighten acceptance criteria.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRefineUserStories}
+                      disabled={isRefiningStories || !storiesInstruction.trim()}
+                      className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-xs font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
+                    >
+                      {isRefiningStories ? "Applying…" : "Apply Story Revision"}
+                    </button>
+                  </div>
+                  <textarea
+                    value={storiesInstruction}
+                    onChange={(e) => setStoriesInstruction(e.target.value)}
+                    rows={4}
+                    placeholder="Describe what should change in the user stories…"
+                    className="mt-4 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  />
                 </div>
               )}
-            </>
+
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-5">
+                {isGeneratingStories ? (
+                  <div className="flex flex-col items-center gap-3 py-12 text-center">
+                    <Spinner className="w-7 h-7 text-emerald-400" />
+                    <p className="text-sm text-zinc-300">Writing user stories and acceptance criteria…</p>
+                  </div>
+                ) : isEditingStories ? (
+                  <div className="space-y-3">
+                    <textarea
+                      value={editingStoriesContent}
+                      onChange={(e) => setEditingStoriesContent(e.target.value)}
+                      rows={24}
+                      className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 font-mono text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingStories(false)}
+                        className="rounded-lg bg-zinc-800 px-4 py-2 text-sm text-zinc-300"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveUserStories}
+                        disabled={isSavingStories || !editingStoriesContent.trim()}
+                        className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-2 text-sm font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
+                      >
+                        {isSavingStories ? "Saving…" : "Save User Stories"}
+                      </button>
+                    </div>
+                  </div>
+                ) : userStoriesDraft ? (
+                  <>
+                    {deliveryPushResult && (
+                      <div className="mb-4 flex items-start gap-2 rounded-xl border border-blue-700/50 bg-blue-950/40 px-4 py-3 text-sm">
+                        <svg className="mt-0.5 h-4 w-4 shrink-0 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-blue-300">
+                            {deliveryPushResult.count} item{deliveryPushResult.count !== 1 ? "s" : ""} published to {deliveryPushResult.target === "jira" ? "Jira" : "GitHub"}
+                          </p>
+                          <p className="mt-0.5 break-all font-mono text-xs text-blue-500">
+                            {deliveryPushResult.items.join(" · ")}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setDeliveryPushResult(null)}
+                          className="text-blue-600 transition-colors hover:text-blue-300"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="mb-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openDeliveryModal("jira")}
+                        disabled={isPublishingDelivery}
+                        className="rounded-lg border border-blue-700/60 bg-blue-900/50 px-3 py-2 text-xs font-semibold text-blue-300 transition-colors hover:border-blue-500/70 hover:bg-blue-800/60 disabled:opacity-50"
+                      >
+                        {isPublishingDelivery && deliveryTarget === "jira" ? "Publishing…" : "Push to Jira"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openDeliveryModal("github")}
+                        disabled={isPublishingDelivery}
+                        className="rounded-lg border border-zinc-600 bg-zinc-900/70 px-3 py-2 text-xs font-semibold text-zinc-200 transition-colors hover:border-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
+                      >
+                        {isPublishingDelivery && deliveryTarget === "github" ? "Publishing…" : "Create GitHub Issues"}
+                      </button>
+                    </div>
+
+                    <div className="prose prose-invert prose-sm max-w-none">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
+                        {userStoriesDraft}
+                      </ReactMarkdown>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                    <p className="text-sm font-medium text-zinc-400">{architectureDraft ? "User stories not generated yet" : "User stories are blocked"}</p>
+                    <p className="max-w-sm text-xs text-zinc-600">
+                      {architectureDraft
+                        ? "Generate the backlog here after you are happy with the architecture."
+                        : "This stage becomes available after the architecture is ready."}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>

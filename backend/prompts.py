@@ -73,6 +73,48 @@ def build_user_stories_prompt(prd_draft: str, architecture_draft: str) -> str:
     )
 
 
+def build_prd_refine_prompt(prd_draft: str, instruction: str) -> str:
+    return _render_template(
+        _load_prompt_template("prd_refine.md"),
+        {
+            "PRD_DRAFT": prd_draft,
+            "INSTRUCTION": instruction,
+        },
+    )
+
+
+def build_architecture_refine_prompt(
+    prd_draft: str,
+    architecture_draft: str,
+    instruction: str,
+) -> str:
+    return _render_template(
+        _load_prompt_template("architecture_refine.md"),
+        {
+            "PRD_DRAFT": prd_draft,
+            "ARCHITECTURE_DRAFT": architecture_draft,
+            "INSTRUCTION": instruction,
+        },
+    )
+
+
+def build_user_stories_refine_prompt(
+    prd_draft: str,
+    architecture_draft: str,
+    user_stories_draft: str,
+    instruction: str,
+) -> str:
+    return _render_template(
+        _load_prompt_template("user_stories_refine.md"),
+        {
+            "PRD_DRAFT": prd_draft,
+            "ARCHITECTURE_DRAFT": architecture_draft,
+            "USER_STORIES_DRAFT": user_stories_draft,
+            "INSTRUCTION": instruction,
+        },
+    )
+
+
 def build_delivery_items_prompt(user_stories_draft: str) -> str:
     return _render_template(
         _load_prompt_template("delivery_items.md"),
