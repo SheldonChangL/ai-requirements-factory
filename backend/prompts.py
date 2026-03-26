@@ -115,6 +115,38 @@ def build_user_stories_refine_prompt(
     )
 
 
+def build_arch_chat_prompt(
+    prd_draft: str,
+    architecture_draft: str,
+    conversation_text: str,
+) -> str:
+    return _render_template(
+        _load_prompt_template("arch_chat.md"),
+        {
+            "PRD_DRAFT": prd_draft,
+            "ARCHITECTURE_DRAFT": architecture_draft,
+            "CONVERSATION_TEXT": conversation_text,
+        },
+    )
+
+
+def build_stories_chat_prompt(
+    prd_draft: str,
+    architecture_draft: str,
+    user_stories_draft: str,
+    conversation_text: str,
+) -> str:
+    return _render_template(
+        _load_prompt_template("stories_chat.md"),
+        {
+            "PRD_DRAFT": prd_draft,
+            "ARCHITECTURE_DRAFT": architecture_draft,
+            "USER_STORIES_DRAFT": user_stories_draft,
+            "CONVERSATION_TEXT": conversation_text,
+        },
+    )
+
+
 def build_delivery_items_prompt(user_stories_draft: str) -> str:
     return _render_template(
         _load_prompt_template("delivery_items.md"),

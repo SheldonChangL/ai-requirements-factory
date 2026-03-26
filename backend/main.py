@@ -29,10 +29,12 @@ try:
     from integrations.registry_map import DELIVERY_INTEGRATIONS
     from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from prompts import (
+        build_arch_chat_prompt,
         build_architecture_refine_prompt,
         build_architect_prompt,
         build_prd_refine_prompt,
         build_sa_prompt,
+        build_stories_chat_prompt,
         build_user_stories_refine_prompt,
         build_user_stories_prompt,
     )
@@ -49,10 +51,12 @@ except ModuleNotFoundError:
     from backend.integrations.registry_map import DELIVERY_INTEGRATIONS
     from backend.model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from backend.prompts import (
+        build_arch_chat_prompt,
         build_architecture_refine_prompt,
         build_architect_prompt,
         build_prd_refine_prompt,
         build_sa_prompt,
+        build_stories_chat_prompt,
         build_user_stories_refine_prompt,
         build_user_stories_prompt,
     )
@@ -85,6 +89,67 @@ class SAState(TypedDict):
     model_choice: str
     architecture_draft: str
     user_stories_draft: str
+
+
+# ---------------------------------------------------------------------------
+# Stage chat — SQLite-backed message store
+# ---------------------------------------------------------------------------
+
+CONTENT_START_MARKER = "[CONTENT_START]"
+CONTENT_END_MARKER   = "[CONTENT_END]"
+
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS stage_messages (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id  TEXT    NOT NULL,
+        stage      TEXT    NOT NULL,
+        role       TEXT    NOT NULL,
+        content    TEXT    NOT NULL,
+        created_at REAL    NOT NULL DEFAULT (strftime('%s','now'))
+    )
+""")
+conn.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stage_messages ON stage_messages (thread_id, stage, id)"
+)
+conn.commit()
+
+
+def _load_stage_messages(thread_id: str, stage: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT role, content FROM stage_messages WHERE thread_id=? AND stage=? ORDER BY id",
+        (thread_id, stage),
+    ).fetchall()
+    return [{"role": row[0], "content": row[1]} for row in rows]
+
+
+def _append_stage_message(thread_id: str, stage: str, role: str, content: str) -> None:
+    conn.execute(
+        "INSERT INTO stage_messages (thread_id, stage, role, content) VALUES (?, ?, ?, ?)",
+        (thread_id, stage, role, content),
+    )
+    conn.commit()
+
+
+def _delete_stage_messages(thread_id: str) -> None:
+    conn.execute("DELETE FROM stage_messages WHERE thread_id=?", (thread_id,))
+    conn.commit()
+
+
+def _extract_stage_content(response_text: str) -> tuple[str, str | None]:
+    """
+    Split agent response into (conversational_part, updated_artifact | None).
+
+    If the agent wrapped updated content in [CONTENT_START]…[CONTENT_END],
+    the text before the marker becomes the chat message and the content inside
+    becomes the updated artifact.  Otherwise the full text is the chat message.
+    """
+    start = response_text.find(CONTENT_START_MARKER)
+    end   = response_text.find(CONTENT_END_MARKER)
+    if start != -1 and end != -1 and end > start:
+        conversation_part = response_text[:start].strip()
+        content_part      = response_text[start + len(CONTENT_START_MARKER):end].strip()
+        return conversation_part or "I've updated the content as requested.", content_part
+    return response_text, None
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +653,7 @@ async def delete_thread(thread_id: str):
         conn.execute(
             "DELETE FROM checkpoint_writes WHERE thread_id = ?", (thread_id,)
         )
+        _delete_stage_messages(thread_id)
         conn.commit()
     except sqlite3.Error as exc:
         raise HTTPException(
@@ -931,6 +997,132 @@ async def refine_user_stories(request: RefineUserStoriesRequest):
         )
 
     return RefineUserStoriesResponse(user_stories_draft=result)
+
+
+# ---------------------------------------------------------------------------
+# Stage chat endpoints
+# ---------------------------------------------------------------------------
+
+VALID_STAGES = {"architecture", "stories"}
+
+
+class StageChatRequest(BaseModel):
+    thread_id: str
+    user_input: str
+    model_choice: str = "ollama"
+
+
+class StageChatResponse(BaseModel):
+    ai_response: str
+    updated_content: str | None = None
+
+
+class StageHistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
+class StageHistoryResponse(BaseModel):
+    messages: list[StageHistoryMessage]
+
+
+@app.post("/api/stage/{stage}/chat", response_model=StageChatResponse)
+async def stage_chat(stage: str, request: StageChatRequest):
+    """
+    Send a message to the stage-specific discussion agent.
+
+    Each stage (architecture / stories) maintains its own conversation
+    history, separate from the main PRD chat.  The agent has full context
+    of the current PRD and relevant artifacts injected into every prompt.
+
+    If the agent produces updated artifact content it wraps it in
+    [CONTENT_START]…[CONTENT_END].  The endpoint parses this, persists the
+    updated artifact back to the main thread state, and returns both the
+    conversational message and the new content to the frontend.
+    """
+    if stage not in VALID_STAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_stage", f"Stage must be one of: {sorted(VALID_STAGES)}"),
+        )
+    if not request.user_input.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "user_input cannot be empty."),
+        )
+
+    model_choice = validate_model_choice(request.model_choice)
+    values = get_thread_values(request.thread_id)
+    prd_draft           = str(values.get("prd_draft", "")).strip()
+    architecture_draft  = str(values.get("architecture_draft", "")).strip()
+    user_stories_draft  = str(values.get("user_stories_draft", "")).strip()
+
+    # Build conversation text from persisted history
+    history = _load_stage_messages(request.thread_id, stage)
+    _append_stage_message(request.thread_id, stage, "user", request.user_input.strip())
+    history.append({"role": "user", "content": request.user_input.strip()})
+
+    conversation_text = "\n".join(
+        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+        for m in history
+    )
+
+    if stage == "architecture":
+        prompt = build_arch_chat_prompt(
+            prd_draft=prd_draft,
+            architecture_draft=architecture_draft,
+            conversation_text=conversation_text,
+        )
+    else:
+        prompt = build_stories_chat_prompt(
+            prd_draft=prd_draft,
+            architecture_draft=architecture_draft,
+            user_stories_draft=user_stories_draft,
+            conversation_text=conversation_text,
+        )
+
+    try:
+        raw_response = await asyncio.to_thread(invoke_model, model_choice, prompt)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("model_error", f"Stage agent failed: {exc}"),
+        )
+
+    ai_message, updated_content = _extract_stage_content(raw_response)
+    _append_stage_message(request.thread_id, stage, "assistant", ai_message)
+
+    # Persist updated artifact back to main thread if the agent produced one
+    if updated_content:
+        main_config = {"configurable": {"thread_id": request.thread_id}}
+        state_update = (
+            {"architecture_draft": updated_content, "user_stories_draft": ""}
+            if stage == "architecture"
+            else {"user_stories_draft": updated_content}
+        )
+        try:
+            graph.update_state(main_config, state_update)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=error_detail("state_error", f"Failed to persist updated {stage}: {exc}"),
+            )
+
+    return StageChatResponse(ai_response=ai_message, updated_content=updated_content)
+
+
+@app.get("/api/stage/{stage}/chat/{thread_id}", response_model=StageHistoryResponse)
+async def get_stage_chat_history(stage: str, thread_id: str):
+    """Return the persisted stage chat history for a given thread."""
+    if stage not in VALID_STAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_stage", f"Stage must be one of: {sorted(VALID_STAGES)}"),
+        )
+    messages = _load_stage_messages(thread_id, stage)
+    return StageHistoryResponse(
+        messages=[StageHistoryMessage(role=m["role"], content=m["content"]) for m in messages]
+    )
 
 
 # ---------------------------------------------------------------------------
