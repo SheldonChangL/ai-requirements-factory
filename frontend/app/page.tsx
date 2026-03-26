@@ -253,6 +253,132 @@ function Mermaid({ chart }: { chart: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Sub-component: StageChatPanel
+// ---------------------------------------------------------------------------
+
+type AccentColor = "indigo" | "emerald";
+
+const ACCENT_STYLES: Record<AccentColor, { border: string; ring: string; btn: string; dot: string }> = {
+  indigo:  { border: "focus:border-indigo-500  focus:ring-indigo-500/40",  ring: "ring-indigo-500/30",  btn: "from-indigo-600 to-violet-600",  dot: "bg-indigo-400" },
+  emerald: { border: "focus:border-emerald-500 focus:ring-emerald-500/40", ring: "ring-emerald-500/30", btn: "from-emerald-600 to-teal-600",    dot: "bg-emerald-400" },
+};
+
+function StageChatPanel({
+  stage,
+  accentColor,
+  messages,
+  input,
+  isSending,
+  onInputChange,
+  onSend,
+  placeholder,
+}: {
+  stage: string;
+  accentColor: AccentColor;
+  messages: { role: string; content: string }[];
+  input: string;
+  isSending: boolean;
+  onInputChange: (v: string) => void;
+  onSend: () => void;
+  placeholder: string;
+}) {
+  const accent = ACCENT_STYLES[accentColor];
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!isSending && input.trim()) onSend();
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800/60">
+        <span className={`w-1.5 h-1.5 rounded-full ${accent.dot}`} />
+        <h4 className="text-sm font-semibold text-zinc-100 capitalize">{stage} Discussion</h4>
+        <span className="ml-1.5 text-xs text-zinc-600">
+          {messages.length > 0 ? `${Math.ceil(messages.length / 2)} turn${Math.ceil(messages.length / 2) !== 1 ? "s" : ""}` : "No messages yet"}
+        </span>
+      </div>
+
+      {/* Message history */}
+      {messages.length > 0 && (
+        <div className="max-h-64 overflow-y-auto px-4 py-3 space-y-3">
+          {messages.map((m, i) => (
+            <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              {m.role === "assistant" && (
+                <div className={`w-5 h-5 rounded-full bg-gradient-to-br ${accent.btn} flex items-center justify-center shrink-0 mt-0.5`}>
+                  <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" />
+                  </svg>
+                </div>
+              )}
+              <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                m.role === "user"
+                  ? "bg-zinc-800 text-zinc-200"
+                  : "bg-zinc-900 border border-zinc-800 text-zinc-300"
+              }`}>
+                {m.content}
+              </div>
+            </div>
+          ))}
+          {isSending && (
+            <div className="flex gap-2.5 justify-start">
+              <div className={`w-5 h-5 rounded-full bg-gradient-to-br ${accent.btn} flex items-center justify-center shrink-0 mt-0.5`}>
+                <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" />
+                </svg>
+              </div>
+              <div className="rounded-xl bg-zinc-900 border border-zinc-800 px-3 py-2">
+                <span className="flex gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: "300ms" }} />
+                </span>
+              </div>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+      )}
+
+      {/* Input */}
+      <div className="px-4 py-3 border-t border-zinc-800/60 flex gap-2 items-end">
+        <textarea
+          value={input}
+          onChange={(e) => onInputChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={2}
+          placeholder={placeholder}
+          disabled={isSending}
+          className={`flex-1 resize-none rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${accent.border}`}
+        />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={isSending || !input.trim()}
+          className={`shrink-0 flex items-center justify-center w-9 h-9 rounded-xl bg-gradient-to-r ${accent.btn} text-white disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed transition-all shadow-md`}
+        >
+          {isSending ? (
+            <Spinner className="w-3.5 h-3.5" />
+          ) : (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Sub-component: InteractiveQuestionnaire
 // ---------------------------------------------------------------------------
 
@@ -491,17 +617,20 @@ export default function HomePage() {
   const [isEditingArch, setIsEditingArch]         = useState(false);
   const [editingArchContent, setEditingArchContent] = useState("");
   const [isSavingArch, setIsSavingArch]           = useState(false);
-  const [architectureInstruction, setArchitectureInstruction] = useState("");
-  const [isRefiningArchitecture, setIsRefiningArchitecture] = useState(false);
-
   // ── User Stories state ───────────────────────────────────────────────────
   const [userStoriesDraft, setUserStoriesDraft]       = useState("");
   const [isGeneratingStories, setIsGeneratingStories] = useState(false);
   const [isEditingStories, setIsEditingStories]       = useState(false);
   const [editingStoriesContent, setEditingStoriesContent] = useState("");
   const [isSavingStories, setIsSavingStories]         = useState(false);
-  const [storiesInstruction, setStoriesInstruction]   = useState("");
-  const [isRefiningStories, setIsRefiningStories]     = useState(false);
+
+  // ── Stage chat state ──────────────────────────────────────────────────────
+  const [archChatMessages, setArchChatMessages]     = useState<{role:string;content:string}[]>([]);
+  const [archChatInput, setArchChatInput]           = useState("");
+  const [isSendingArchChat, setIsSendingArchChat]   = useState(false);
+  const [storiesChatMessages, setStoriesChatMessages] = useState<{role:string;content:string}[]>([]);
+  const [storiesChatInput, setStoriesChatInput]     = useState("");
+  const [isSendingStoriesChat, setIsSendingStoriesChat] = useState(false);
 
   // ── Delivery state ────────────────────────────────────────────────────────
   const [jiraConfig, setJiraConfig]               = useState<JiraConfig>({ domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" });
@@ -580,8 +709,10 @@ export default function HomePage() {
       setIsEditingArch(false);
       setIsEditingStories(false);
       setPrdInstruction("");
-      setArchitectureInstruction("");
-      setStoriesInstruction("");
+      setArchChatMessages([]);
+      setArchChatInput("");
+      setStoriesChatMessages([]);
+      setStoriesChatInput("");
       setAmendmentBannerDismissed(false);
       return;
     }
@@ -600,16 +731,26 @@ export default function HomePage() {
     setIsEditingArch(false);
     setIsEditingStories(false);
     setPrdInstruction("");
-    setArchitectureInstruction("");
-    setStoriesInstruction("");
+    setArchChatMessages([]);
+    setArchChatInput("");
+    setStoriesChatMessages([]);
+    setStoriesChatInput("");
     setError(null);
 
-    fetch(`${API_BASE}/api/chat/${activeThreadId}`, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ThreadStateResponse>;
-      })
-      .then((data) => {
+    const tid = activeThreadId;
+
+    // Load main thread state + both stage chat histories in parallel
+    Promise.all([
+      fetch(`${API_BASE}/api/chat/${tid}`, { signal: controller.signal }).then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<ThreadStateResponse>;
+      }),
+      fetch(`${API_BASE}/api/stage/architecture/chat/${tid}`, { signal: controller.signal })
+        .then((r) => r.ok ? r.json() : { messages: [] }),
+      fetch(`${API_BASE}/api/stage/stories/chat/${tid}`, { signal: controller.signal })
+        .then((r) => r.ok ? r.json() : { messages: [] }),
+    ])
+      .then(([data, archHistory, storiesHistory]) => {
         setMessages(
           data.messages.map((m) => ({
             role: m.role as "user" | "assistant",
@@ -620,6 +761,8 @@ export default function HomePage() {
         setIsReady(data.is_ready ?? false);
         setArchitectureDraft(data.architecture_draft ?? "");
         setUserStoriesDraft(data.user_stories_draft ?? "");
+        setArchChatMessages(archHistory.messages ?? []);
+        setStoriesChatMessages(storiesHistory.messages ?? []);
         if (data.user_stories_draft) {
           setActiveWorkspaceStage("stories");
         } else if (data.architecture_draft) {
@@ -634,6 +777,8 @@ export default function HomePage() {
         setIsReady(false);
         setArchitectureDraft("");
         setUserStoriesDraft("");
+        setArchChatMessages([]);
+        setStoriesChatMessages([]);
       })
       .finally(() => {
         clearTimeout(timeoutId);
@@ -867,34 +1012,44 @@ export default function HomePage() {
     }
   };
 
-  const handleRefineArchitecture = async () => {
-    if (!activeThreadId || !architectureInstruction.trim()) return;
-    setIsRefiningArchitecture(true);
+  // ── Stage chat send ──────────────────────────────────────────────────────
+  const handleStageChatSend = async (stage: "architecture" | "stories") => {
+    if (!activeThreadId) return;
+    const input    = stage === "architecture" ? archChatInput    : storiesChatInput;
+    const setInput = stage === "architecture" ? setArchChatInput : setStoriesChatInput;
+    const setMsgs  = stage === "architecture" ? setArchChatMessages : setStoriesChatMessages;
+    const setSending = stage === "architecture" ? setIsSendingArchChat : setIsSendingStoriesChat;
+
+    if (!input.trim()) return;
+    const userMsg = input.trim();
+    setInput("");
+    setMsgs((prev) => [...prev, { role: "user", content: userMsg }]);
+    setSending(true);
     setError(null);
+
     try {
-      const res = await fetch(`${API_BASE}/api/refine_architecture`, {
+      const res = await fetch(`${API_BASE}/api/stage/${stage}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          thread_id: activeThreadId,
-          model_choice: modelChoice,
-          instruction: architectureInstruction,
-        }),
+        body: JSON.stringify({ thread_id: activeThreadId, user_input: userMsg, model_choice: modelChoice }),
       });
-      if (!res.ok) {
-        await throwApiError(res);
-      }
+      if (!res.ok) await throwApiError(res);
       const data = await res.json();
-      setArchitectureDraft(data.architecture_draft);
-      setUserStoriesDraft("");
-      setArchitectureInstruction("");
-      setIsEditingArch(false);
-      setActiveWorkspaceStage("architecture");
+      setMsgs((prev) => [...prev, { role: "assistant", content: data.ai_response }]);
+      if (data.updated_content) {
+        if (stage === "architecture") {
+          setArchitectureDraft(data.updated_content);
+          setUserStoriesDraft("");
+        } else {
+          setUserStoriesDraft(data.updated_content);
+        }
+      }
     } catch (e) {
-      console.error(e);
-      setError(e instanceof Error ? e.message : "Failed to refine architecture");
+      setMsgs((prev) => prev.slice(0, -1)); // remove the optimistic user message
+      setInput(userMsg);
+      setError(e instanceof Error ? e.message : "Stage chat failed");
     } finally {
-      setIsRefiningArchitecture(false);
+      setSending(false);
     }
   };
 
@@ -964,36 +1119,6 @@ export default function HomePage() {
       setError(e instanceof Error ? e.message : "Failed to save user stories");
     } finally {
       setIsSavingStories(false);
-    }
-  };
-
-  const handleRefineUserStories = async () => {
-    if (!activeThreadId || !storiesInstruction.trim()) return;
-    setIsRefiningStories(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/refine_user_stories`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          thread_id: activeThreadId,
-          model_choice: modelChoice,
-          instruction: storiesInstruction,
-        }),
-      });
-      if (!res.ok) {
-        await throwApiError(res);
-      }
-      const data = await res.json();
-      setUserStoriesDraft(data.user_stories_draft);
-      setStoriesInstruction("");
-      setIsEditingStories(false);
-      setActiveWorkspaceStage("stories");
-    } catch (e) {
-      console.error(e);
-      setError(e instanceof Error ? e.message : "Failed to refine user stories");
-    } finally {
-      setIsRefiningStories(false);
     }
   };
 
@@ -1909,29 +2034,16 @@ export default function HomePage() {
               </div>
 
               {architectureDraft && !isEditingArch && (
-                <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-semibold text-zinc-100">AI Revision</h4>
-                      <p className="mt-1 text-xs text-zinc-500">Ask AI to revise only the architecture. Example: switch to event-driven processing, add Redis cache, split API and worker services.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleRefineArchitecture}
-                      disabled={isRefiningArchitecture || !architectureInstruction.trim()}
-                      className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
-                    >
-                      {isRefiningArchitecture ? "Applying…" : "Apply Architecture Revision"}
-                    </button>
-                  </div>
-                  <textarea
-                    value={architectureInstruction}
-                    onChange={(e) => setArchitectureInstruction(e.target.value)}
-                    rows={4}
-                    placeholder="Describe how this architecture should change…"
-                    className="mt-4 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
-                  />
-                </div>
+                <StageChatPanel
+                  stage="architecture"
+                  accentColor="indigo"
+                  messages={archChatMessages}
+                  input={archChatInput}
+                  isSending={isSendingArchChat}
+                  onInputChange={setArchChatInput}
+                  onSend={() => handleStageChatSend("architecture")}
+                  placeholder="Ask about or request changes to the architecture… (e.g. add Redis cache, explain the API gateway choice)"
+                />
               )}
 
               <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-5">
@@ -2041,29 +2153,16 @@ export default function HomePage() {
               </div>
 
               {userStoriesDraft && !isEditingStories && (
-                <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-semibold text-zinc-100">AI Revision</h4>
-                      <p className="mt-1 text-xs text-zinc-500">Ask AI to revise only the user stories. Example: add admin stories, split large stories, tighten acceptance criteria.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleRefineUserStories}
-                      disabled={isRefiningStories || !storiesInstruction.trim()}
-                      className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-xs font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
-                    >
-                      {isRefiningStories ? "Applying…" : "Apply Story Revision"}
-                    </button>
-                  </div>
-                  <textarea
-                    value={storiesInstruction}
-                    onChange={(e) => setStoriesInstruction(e.target.value)}
-                    rows={4}
-                    placeholder="Describe what should change in the user stories…"
-                    className="mt-4 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
-                  />
-                </div>
+                <StageChatPanel
+                  stage="stories"
+                  accentColor="emerald"
+                  messages={storiesChatMessages}
+                  input={storiesChatInput}
+                  isSending={isSendingStoriesChat}
+                  onInputChange={setStoriesChatInput}
+                  onSend={() => handleStageChatSend("stories")}
+                  placeholder="Ask about or request changes to the stories… (e.g. add admin stories, tighten acceptance criteria)"
+                />
               )}
 
               <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-5">
