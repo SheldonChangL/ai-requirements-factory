@@ -139,21 +139,21 @@ export function isJiraConfigured(): boolean {
 // ---------------------------------------------------------------------------
 
 export interface GitHubConfig {
-  owner: string;
-  repo: string;
+  owner?: string; // legacy — repo is now selected at publish time via API
+  repo?: string;
 }
 
 const GITHUB_CONFIG_KEY = "github-config";
 const GITHUB_TOKEN_KEY  = "github-token-enc";
 
 export function loadGitHubConfig(): GitHubConfig {
-  if (typeof window === "undefined") return { owner: "", repo: "" };
+  if (typeof window === "undefined") return {};
   try {
     const raw = localStorage.getItem(GITHUB_CONFIG_KEY);
-    if (!raw) return { owner: "", repo: "" };
+    if (!raw) return {};
     return JSON.parse(raw) as GitHubConfig;
   } catch {
-    return { owner: "", repo: "" };
+    return {};
   }
 }
 
@@ -176,8 +176,7 @@ export async function saveGitHubToken(token: string): Promise<void> {
 }
 
 export function isGitHubConfigured(): boolean {
-  const cfg = loadGitHubConfig();
-  return !!(cfg.owner.trim() && cfg.repo.trim() && loadEncryptedTokenSync(GITHUB_TOKEN_KEY));
+  return !!loadEncryptedTokenSync(GITHUB_TOKEN_KEY);
 }
 
 // ---------------------------------------------------------------------------

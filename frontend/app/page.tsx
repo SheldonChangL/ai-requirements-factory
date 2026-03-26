@@ -646,6 +646,10 @@ export default function HomePage() {
   const [selectedJiraProjectKey, setSelectedJiraProjectKey] = useState("");
   const [isLoadingJiraProjects, setIsLoadingJiraProjects] = useState(false);
   const [jiraProjectsFetchFailed, setJiraProjectsFetchFailed] = useState(false);
+  const [githubRepos, setGithubRepos]             = useState<{ full_name: string; owner: string; name: string }[]>([]);
+  const [selectedGithubRepo, setSelectedGithubRepo] = useState("");
+  const [isLoadingGithubRepos, setIsLoadingGithubRepos] = useState(false);
+  const [githubReposFetchFailed, setGithubReposFetchFailed] = useState(false);
 
   // ── Amendment Mode banner ─────────────────────────────────────────────────
   const [amendmentBannerDismissed, setAmendmentBannerDismissed] = useState(false);
@@ -1132,21 +1136,22 @@ export default function HomePage() {
     setDeliveryErrorMsg(null);
     setJiraProjects([]);
     setJiraProjectsFetchFailed(false);
+    setGithubRepos([]);
+    setGithubReposFetchFailed(false);
+    setSelectedJiraProjectKey("");
+    setSelectedGithubRepo("");
     // Reload config from storage each time the modal opens so it picks up any
     // changes the user may have saved in the Settings page mid-session.
     const freshJiraCfg = loadJiraConfig();
-    const freshGithubCfg = loadGitHubConfig();
     setJiraConfig(freshJiraCfg);
-    setGitHubConfig(freshGithubCfg);
     const [freshJiraToken, freshGithubToken] = await Promise.all([
       loadJiraToken(),
       loadGitHubToken(),
     ]);
     setJiraToken(freshJiraToken);
     setGitHubToken(freshGithubToken);
-    setSelectedJiraProjectKey("");
 
-    // Auto-fetch Jira projects if opening for Jira and credentials are ready
+    // Auto-fetch Jira projects
     if (target === "jira" && freshJiraCfg.domain && freshJiraCfg.email && freshJiraToken) {
       setIsLoadingJiraProjects(true);
       try {
@@ -1159,9 +1164,7 @@ export default function HomePage() {
         if (res.ok) {
           const { projects: list } = await res.json();
           setJiraProjects(list);
-          if (list.length > 0) {
-            setSelectedJiraProjectKey(list[0].key);
-          }
+          if (list.length > 0) setSelectedJiraProjectKey(list[0].key);
         } else {
           setJiraProjectsFetchFailed(true);
         }
@@ -1169,6 +1172,26 @@ export default function HomePage() {
         setJiraProjectsFetchFailed(true);
       } finally {
         setIsLoadingJiraProjects(false);
+      }
+    }
+
+    // Auto-fetch GitHub repos
+    if (target === "github" && freshGithubToken) {
+      setIsLoadingGithubRepos(true);
+      try {
+        const params = new URLSearchParams({ token: freshGithubToken });
+        const res = await fetch(`${API_BASE}/api/github/repos?${params}`);
+        if (res.ok) {
+          const { repos: list } = await res.json();
+          setGithubRepos(list);
+          if (list.length > 0) setSelectedGithubRepo(list[0].full_name);
+        } else {
+          setGithubReposFetchFailed(true);
+        }
+      } catch {
+        setGithubReposFetchFailed(true);
+      } finally {
+        setIsLoadingGithubRepos(false);
       }
     }
   };
@@ -1192,8 +1215,8 @@ export default function HomePage() {
           jira_email: jiraConfig.email,
           jira_token: jiraToken,
           jira_project_key: selectedJiraProjectKey,
-          github_owner: githubConfig.owner,
-          github_repo: githubConfig.repo,
+          github_owner: selectedGithubRepo.split("/")[0] ?? "",
+          github_repo: selectedGithubRepo.split("/")[1] ?? "",
           github_token: githubToken,
         }),
       });
@@ -2370,7 +2393,25 @@ export default function HomePage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setDeliveryTarget("github"); setDeliveryErrorMsg(null); }}
+                  onClick={async () => {
+                    setDeliveryTarget("github");
+                    setDeliveryErrorMsg(null);
+                    if (githubRepos.length === 0 && isGitHubConfigured() && githubToken) {
+                      setIsLoadingGithubRepos(true);
+                      setGithubReposFetchFailed(false);
+                      try {
+                        const params = new URLSearchParams({ token: githubToken });
+                        const res = await fetch(`${API_BASE}/api/github/repos?${params}`);
+                        if (res.ok) {
+                          const { repos: list } = await res.json();
+                          setGithubRepos(list);
+                          if (!selectedGithubRepo && list.length > 0) setSelectedGithubRepo(list[0].full_name);
+                        } else { setGithubReposFetchFailed(true); }
+                      } catch { setGithubReposFetchFailed(true); } finally {
+                        setIsLoadingGithubRepos(false);
+                      }
+                    }
+                  }}
                   className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "github" ? "bg-zinc-200 text-zinc-950" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
                 >
                   GitHub
@@ -2458,12 +2499,61 @@ export default function HomePage() {
                 )
               ) : (
                 isGitHubConfigured() ? (
-                  <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3 space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                      <p className="text-xs font-semibold text-emerald-300">GitHub configured</p>
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                        <p className="text-xs font-semibold text-emerald-300">GitHub configured</p>
+                      </div>
                     </div>
-                    <p className="text-xs text-zinc-500 font-mono">{githubConfig.owner}/{githubConfig.repo}</p>
+                    {/* Repo selector */}
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Repository</label>
+                      {isLoadingGithubRepos ? (
+                        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-700 bg-zinc-900">
+                          <Spinner className="w-3.5 h-3.5 text-zinc-500" />
+                          <span className="text-xs text-zinc-500">Loading repositories…</span>
+                        </div>
+                      ) : githubRepos.length > 0 ? (
+                        <div className="relative">
+                          <select
+                            value={selectedGithubRepo}
+                            onChange={(e) => setSelectedGithubRepo(e.target.value)}
+                            className="w-full appearance-none bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm text-zinc-100 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                          >
+                            <option value="" disabled>Select a repository…</option>
+                            {githubRepos.map((r) => (
+                              <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
+                            <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 flex items-start gap-2.5">
+                          <svg className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-amber-300 font-medium">
+                              {githubReposFetchFailed ? "Could not load repositories" : "No repositories loaded"}
+                            </p>
+                            <p className="text-xs text-zinc-500 mt-0.5">
+                              Go to{" "}
+                              <Link href="/settings" onClick={() => setShowDeliveryModal(false)}
+                                className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
+                                Settings
+                              </Link>
+                              {" "}and use <span className="font-semibold text-zinc-400">Test</span> to verify your token.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 py-3 flex items-start gap-3">
@@ -2474,7 +2564,7 @@ export default function HomePage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold text-amber-300">GitHub not configured</p>
                       <p className="text-xs text-zinc-500 mt-0.5">
-                        Add your GitHub owner, repo and token in{" "}
+                        Add your GitHub token in{" "}
                         <Link href="/settings" onClick={() => setShowDeliveryModal(false)}
                           className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
                           Settings
@@ -2513,7 +2603,12 @@ export default function HomePage() {
                     jiraProjects.length === 0 ||
                     !selectedJiraProjectKey
                   )) ||
-                  (deliveryTarget === "github" && !isGitHubConfigured())
+                  (deliveryTarget === "github" && (
+                    !isGitHubConfigured() ||
+                    isLoadingGithubRepos ||
+                    githubRepos.length === 0 ||
+                    !selectedGithubRepo
+                  ))
                 }
                 className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"
               >

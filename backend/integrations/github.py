@@ -22,6 +22,17 @@ def _github_headers(token: str) -> dict[str, str]:
     }
 
 
+def list_github_repos(token: str) -> list[dict[str, str]]:
+    url = "https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member"
+    req = urllib.request.Request(url, headers=_github_headers(token))
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        repos = json.loads(resp.read())
+        return [
+            {"full_name": r["full_name"], "owner": r["owner"]["login"], "name": r["name"]}
+            for r in repos
+        ]
+
+
 def preview_github(items: list[DeliveryItem], config: dict[str, str]) -> list[dict]:
     preview: list[dict] = []
     owner = config.get("owner", "your-org")

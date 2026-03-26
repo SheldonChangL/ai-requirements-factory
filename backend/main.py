@@ -26,6 +26,7 @@ try:
         export_project_markdown,
     )
     from integrations.jira import list_jira_projects
+    from integrations.github import list_github_repos
     from integrations.registry_map import DELIVERY_INTEGRATIONS
     from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from prompts import (
@@ -48,6 +49,7 @@ except ModuleNotFoundError:
         export_project_markdown,
     )
     from backend.integrations.jira import list_jira_projects
+    from backend.integrations.github import list_github_repos
     from backend.integrations.registry_map import DELIVERY_INTEGRATIONS
     from backend.model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from backend.prompts import (
@@ -1343,6 +1345,48 @@ async def get_jira_projects(domain: str, email: str, token: str):
         raise HTTPException(
             status_code=502,
             detail=error_detail("jira_error", str(exc)),
+        )
+
+
+# ---------------------------------------------------------------------------
+# GitHub repos list endpoint
+# ---------------------------------------------------------------------------
+
+class GitHubRepo(BaseModel):
+    full_name: str
+    owner: str
+    name: str
+
+
+class GitHubReposResponse(BaseModel):
+    repos: list[GitHubRepo]
+
+
+@app.get("/api/github/repos", response_model=GitHubReposResponse)
+async def get_github_repos(token: str):
+    """Fetch all repos accessible by the given GitHub token."""
+    try:
+        repos = list_github_repos(token)
+        return GitHubReposResponse(repos=[GitHubRepo(**r) for r in repos])
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("github_auth_error", "Invalid GitHub token"),
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("github_api_error", f"GitHub error: {exc.reason}"),
+        )
+    except urllib.error.URLError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("github_network_error", f"Could not reach GitHub: {exc.reason}"),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("github_error", str(exc)),
         )
 
 

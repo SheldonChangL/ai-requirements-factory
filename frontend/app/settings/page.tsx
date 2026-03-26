@@ -334,51 +334,94 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
 // ---------------------------------------------------------------------------
 
 function GitHubPanel({ onSaved }: { onSaved: () => void }) {
-  const [cfg, setCfg]             = useState<GitHubConfig>({ owner: "", repo: "" });
-  const [token, setToken]         = useState("");
-  const [showToken, setShowToken] = useState(false);
-  const [saved, setSaved]         = useState(false);
+  const [token, setToken]           = useState("");
+  const [showToken, setShowToken]   = useState(false);
+  const [saved, setSaved]           = useState(false);
+  const [testing, setTesting]       = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [repos, setRepos]           = useState<{ full_name: string; owner: string; name: string }[]>([]);
 
   useEffect(() => {
-    setCfg(loadGitHubConfig());
     loadGitHubToken().then(setToken);
+    setTestResult(null);
+    setRepos([]);
   }, []);
 
   async function handleSave() {
-    saveGitHubConfig(cfg);
     await saveGitHubToken(token);
     setSaved(true);
+    setTestResult(null);
     setTimeout(() => { setSaved(false); onSaved(); }, 1200);
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    setRepos([]);
+    try {
+      const params = new URLSearchParams({ token });
+      const res = await fetch(`${API_BASE}/api/github/repos?${params}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const msg = typeof err.detail === "string" ? err.detail : `HTTP ${res.status}`;
+        setTestResult({ ok: false, message: msg });
+      } else {
+        const { repos: list } = await res.json();
+        setRepos(list);
+        setTestResult({ ok: true, message: `Connected — ${list.length} repo(s) found` });
+      }
+    } catch (e: unknown) {
+      setTestResult({ ok: false, message: e instanceof Error ? e.message : "Connection failed" });
+    } finally {
+      setTesting(false);
+    }
   }
 
   return (
     <div className="space-y-4">
-      <Field label="Owner" hint="org or username">
-        <input type="text" value={cfg.owner}
-          onChange={(e) => setCfg((c) => ({ ...c, owner: e.target.value }))}
-          placeholder="your-org-or-username" className={inputCls} />
-      </Field>
-
-      <Field label="Repository">
-        <input type="text" value={cfg.repo}
-          onChange={(e) => setCfg((c) => ({ ...c, repo: e.target.value }))}
-          placeholder="repo-name" className={inputCls} />
-      </Field>
-
-      <Field label="Personal Access Token" hint="session only">
+      <Field label="Personal Access Token">
         <div className="flex gap-2">
           <input type={showToken ? "text" : "password"} value={token}
-            onChange={(e) => setToken(e.target.value)}
+            onChange={(e) => { setToken(e.target.value); setRepos([]); setTestResult(null); }}
             placeholder="ghp_..." className={`${inputCls} flex-1 font-mono`} />
           <button type="button" onClick={() => setShowToken((v) => !v)}
             className="shrink-0 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
             {showToken ? "Hide" : "Show"}
+          </button>
+          <button type="button" onClick={handleTest}
+            disabled={testing || !token.trim()}
+            className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-xs text-zinc-300 hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
+            {testing ? <Spinner className="w-3.5 h-3.5" /> : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            )}
+            Test
           </button>
         </div>
         <p className="mt-1.5 text-[11px] text-zinc-600">
           Requires <span className="font-mono">repo</span> scope. Encrypted and stored locally.
         </p>
       </Field>
+
+      {testResult && (
+        <div className={`flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs ${
+          testResult.ok ? "bg-emerald-950/50 border border-emerald-800/50 text-emerald-300"
+                       : "bg-red-950/50 border border-red-800/50 text-red-300"}`}>
+          <span className="shrink-0 mt-0.5">{testResult.ok ? "✓" : "⚠"}</span>
+          <span className="flex-1 break-words">{testResult.message}</span>
+        </div>
+      )}
+
+      {repos.length > 0 && (
+        <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/50 divide-y divide-zinc-800 max-h-40 overflow-y-auto">
+          {repos.map((r) => (
+            <div key={r.full_name} className="flex items-center gap-2 px-3 py-2">
+              <span className="text-xs text-zinc-300 truncate font-mono">{r.full_name}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="flex justify-end pt-1">
         <button type="button" onClick={handleSave}
