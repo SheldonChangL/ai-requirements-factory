@@ -122,6 +122,19 @@ conn.execute("""
         PRIMARY KEY (thread_id, stage)
     )
 """)
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS stage_events (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id  TEXT    NOT NULL,
+        stage      TEXT    NOT NULL,
+        event_type TEXT    NOT NULL,
+        detail     TEXT,
+        created_at REAL    NOT NULL DEFAULT (strftime('%s','now'))
+    )
+""")
+conn.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stage_events ON stage_events (thread_id, stage, id)"
+)
 conn.commit()
 
 
@@ -149,6 +162,22 @@ def _reset_stage_status(thread_id: str, stage: str) -> None:
     _set_stage_status(thread_id, stage, "draft")
 
 
+def _record_stage_event(thread_id: str, stage: str, event_type: str, detail: str = "") -> None:
+    conn.execute(
+        "INSERT INTO stage_events (thread_id, stage, event_type, detail) VALUES (?, ?, ?, ?)",
+        (thread_id, stage, event_type, detail or ""),
+    )
+    conn.commit()
+
+
+def _load_stage_events(thread_id: str, stage: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT event_type, detail, created_at FROM stage_events WHERE thread_id=? AND stage=? ORDER BY id DESC LIMIT 50",
+        (thread_id, stage),
+    ).fetchall()
+    return [{"event_type": row[0], "detail": row[1], "created_at": row[2]} for row in rows]
+
+
 def _load_stage_messages(thread_id: str, stage: str) -> list[dict]:
     rows = conn.execute(
         "SELECT role, content FROM stage_messages WHERE thread_id=? AND stage=? ORDER BY id",
@@ -168,6 +197,7 @@ def _append_stage_message(thread_id: str, stage: str, role: str, content: str) -
 def _delete_stage_messages(thread_id: str) -> None:
     conn.execute("DELETE FROM stage_messages WHERE thread_id=?", (thread_id,))
     conn.execute("DELETE FROM stage_status WHERE thread_id=?", (thread_id,))
+    conn.execute("DELETE FROM stage_events WHERE thread_id=?", (thread_id,))
     conn.commit()
 
 
@@ -674,6 +704,7 @@ async def refine_prd(request: RefinePrdRequest):
     _reset_stage_status(request.thread_id, "prd")
     _reset_stage_status(request.thread_id, "architecture")
     _reset_stage_status(request.thread_id, "stories")
+    _record_stage_event(request.thread_id, "prd", "ai_revised")
     return RefinePrdResponse(prd_draft=updated_prd, is_ready=True)
 
 
@@ -685,15 +716,16 @@ class DeleteThreadResponse(BaseModel):
 @app.delete("/api/chat/{thread_id}", response_model=DeleteThreadResponse)
 async def delete_thread(thread_id: str):
     """Delete all persisted checkpoint data for a given thread_id."""
+    # Clean up LangGraph checkpoint tables (may not exist in all environments)
+    for table in ("checkpoints", "checkpoint_writes"):
+        try:
+            conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+            conn.commit()
+        except sqlite3.Error:
+            pass  # table may not exist in some environments
+    # Always clean up stage data
     try:
-        conn.execute(
-            "DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,)
-        )
-        conn.execute(
-            "DELETE FROM checkpoint_writes WHERE thread_id = ?", (thread_id,)
-        )
         _delete_stage_messages(thread_id)
-        conn.commit()
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=500,
@@ -778,6 +810,7 @@ async def generate_architecture(request: GenerateArchitectureRequest):
 
     _reset_stage_status(request.thread_id, "architecture")
     _reset_stage_status(request.thread_id, "stories")
+    _record_stage_event(request.thread_id, "architecture", "generated")
     return GenerateArchitectureResponse(architecture_draft=result)
 
 
@@ -819,6 +852,7 @@ async def update_architecture(thread_id: str, request: UpdateArchitectureRequest
         )
     _reset_stage_status(thread_id, "architecture")
     _reset_stage_status(thread_id, "stories")
+    _record_stage_event(thread_id, "architecture", "manually_edited")
     return UpdateArchitectureResponse(success=True, architecture_draft=request.content)
 
 
@@ -959,6 +993,7 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
         )
 
     _reset_stage_status(request.thread_id, "stories")
+    _record_stage_event(request.thread_id, "stories", "generated")
     return GenerateUserStoriesResponse(user_stories_draft=result)
 
 
@@ -992,6 +1027,7 @@ async def update_user_stories(thread_id: str, request: UpdateUserStoriesRequest)
             ),
         )
     _reset_stage_status(thread_id, "stories")
+    _record_stage_event(thread_id, "stories", "manually_edited")
     return UpdateUserStoriesResponse(success=True, user_stories_draft=content)
 
 
@@ -1042,6 +1078,7 @@ async def refine_user_stories(request: RefineUserStoriesRequest):
         )
 
     _reset_stage_status(request.thread_id, "stories")
+    _record_stage_event(request.thread_id, "stories", "ai_revised")
     return RefineUserStoriesResponse(user_stories_draft=result)
 
 
@@ -1159,6 +1196,8 @@ async def stage_chat(stage: str, request: StageChatRequest):
                 detail=error_detail("state_error", f"Failed to persist updated {stage}: {exc}"),
             )
 
+    if updated_content is not None:
+        _record_stage_event(thread_id, stage, "ai_revised")
     return StageChatResponse(ai_response=ai_message, updated_content=updated_content)
 
 
@@ -1472,7 +1511,27 @@ async def set_stage_status_endpoint(stage: str, thread_id: str, request: SetStag
     if request.status not in VALID_STAGE_STATUSES:
         raise HTTPException(status_code=400, detail=error_detail("invalid_status", f"Status must be one of: {sorted(VALID_STAGE_STATUSES)}"))
     _set_stage_status(thread_id, stage, request.status)
+    event_label = "approved" if request.status == "approved" else "reopened" if request.status == "draft" else "marked_needs_revision"
+    _record_stage_event(thread_id, stage, event_label)
     return {"stage": stage, "thread_id": thread_id, "status": request.status}
+
+
+class StageEventItem(BaseModel):
+    event_type: str
+    detail: str
+    created_at: float
+
+
+class StageEventsResponse(BaseModel):
+    events: list[StageEventItem]
+
+
+@app.get("/api/stage/{stage}/events/{thread_id}", response_model=StageEventsResponse)
+async def get_stage_events(stage: str, thread_id: str):
+    if stage not in ("prd", "architecture", "stories"):
+        raise HTTPException(status_code=400, detail=error_detail("invalid_stage", "Invalid stage"))
+    events = _load_stage_events(thread_id, stage)
+    return StageEventsResponse(events=[StageEventItem(**e) for e in events])
 
 
 # ---------------------------------------------------------------------------
