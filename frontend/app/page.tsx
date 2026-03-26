@@ -650,6 +650,10 @@ export default function HomePage() {
   const [selectedGithubRepo, setSelectedGithubRepo] = useState("");
   const [isLoadingGithubRepos, setIsLoadingGithubRepos] = useState(false);
   const [githubReposFetchFailed, setGithubReposFetchFailed] = useState(false);
+  // delivery modal step: "configure" → pick target/project, "preview" → review items
+  const [deliveryStep, setDeliveryStep]           = useState<"configure" | "preview">("configure");
+  const [deliveryPreviewItems, setDeliveryPreviewItems] = useState<{ title: string; group: string; labels: string[]; estimate: number }[]>([]);
+  const [isLoadingPreview, setIsLoadingPreview]   = useState(false);
 
   // ── Amendment Mode banner ─────────────────────────────────────────────────
   const [amendmentBannerDismissed, setAmendmentBannerDismissed] = useState(false);
@@ -1140,6 +1144,8 @@ export default function HomePage() {
     setGithubReposFetchFailed(false);
     setSelectedJiraProjectKey("");
     setSelectedGithubRepo("");
+    setDeliveryStep("configure");
+    setDeliveryPreviewItems([]);
     // Reload config from storage each time the modal opens so it picks up any
     // changes the user may have saved in the Settings page mid-session.
     const freshJiraCfg = loadJiraConfig();
@@ -1193,6 +1199,39 @@ export default function HomePage() {
       } finally {
         setIsLoadingGithubRepos(false);
       }
+    }
+  };
+
+  // ── Preview delivery items ───────────────────────────────────────────────
+  const handlePreviewDelivery = async () => {
+    if (!activeThreadId) return;
+    setIsLoadingPreview(true);
+    setDeliveryErrorMsg(null);
+    try {
+      const body: Record<string, string> = {
+        thread_id: activeThreadId,
+        model_choice: modelChoice,
+        target: deliveryTarget,
+      };
+      if (deliveryTarget === "jira") {
+        body.jira_project_key = selectedJiraProjectKey;
+      } else {
+        body.github_owner = selectedGithubRepo.split("/")[0] ?? "";
+        body.github_repo  = selectedGithubRepo.split("/")[1] ?? "";
+      }
+      const res = await fetch(`${API_BASE}/api/delivery/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) { await throwApiError(res); }
+      const data = await res.json();
+      setDeliveryPreviewItems(data.items);
+      setDeliveryStep("preview");
+    } catch (e: unknown) {
+      setDeliveryErrorMsg(e instanceof Error ? e.message : "Preview failed");
+    } finally {
+      setIsLoadingPreview(false);
     }
   };
 
@@ -2360,6 +2399,80 @@ export default function HomePage() {
               </button>
             </div>
 
+            {deliveryStep === "preview" ? (
+              <>
+                {/* ── Step 2: Preview ── */}
+                <div className="px-5 py-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-zinc-400">
+                      <span className="font-semibold text-zinc-200">{deliveryPreviewItems.length}</span> item{deliveryPreviewItems.length !== 1 ? "s" : ""} will be created in{" "}
+                      <span className="font-mono text-zinc-300">
+                        {deliveryTarget === "jira" ? selectedJiraProjectKey : selectedGithubRepo}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-zinc-700/60 divide-y divide-zinc-800 max-h-72 overflow-y-auto">
+                    {deliveryPreviewItems.map((item, i) => (
+                      <div key={i} className="px-4 py-3 space-y-1.5">
+                        <p className="text-sm text-zinc-100 leading-snug">{item.title}</p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {item.group && (
+                            <span className="rounded-full bg-indigo-950/60 border border-indigo-800/40 px-2 py-0.5 text-[10px] font-medium text-indigo-300">
+                              {item.group}
+                            </span>
+                          )}
+                          <span className="rounded-full bg-zinc-800 border border-zinc-700 px-2 py-0.5 text-[10px] text-zinc-400">
+                            {item.estimate} pts
+                          </span>
+                          {item.labels.map((l) => (
+                            <span key={l} className="rounded-full bg-zinc-800/60 border border-zinc-700/60 px-2 py-0.5 text-[10px] text-zinc-500">
+                              {l}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {deliveryErrorMsg && (
+                    <div className="flex items-start gap-2 bg-red-950/50 border border-red-800/50 rounded-lg px-3 py-2.5 text-xs text-red-300">
+                      <span className="shrink-0 mt-0.5">⚠</span>
+                      <span className="flex-1 break-words">{deliveryErrorMsg}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="px-5 py-4 border-t border-zinc-700/60 bg-zinc-900/50 flex justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setDeliveryStep("configure"); setDeliveryErrorMsg(null); }}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-700/50 hover:bg-zinc-700 rounded-lg transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePublishDelivery}
+                    disabled={isPublishingDelivery}
+                    className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"
+                  >
+                    {isPublishingDelivery ? (
+                      <><Spinner className="w-3.5 h-3.5" />Publishing…</>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
+                        Publish {deliveryPreviewItems.length} item{deliveryPreviewItems.length !== 1 ? "s" : ""}
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : (
+            <>
             <div className="px-5 py-4 space-y-4">
               {/* Target selector */}
               <div className="flex gap-2">
@@ -2594,9 +2707,9 @@ export default function HomePage() {
               </button>
               <button
                 type="button"
-                onClick={handlePublishDelivery}
+                onClick={handlePreviewDelivery}
                 disabled={
-                  isPublishingDelivery ||
+                  isLoadingPreview ||
                   (deliveryTarget === "jira" && (
                     !isJiraConfigured() ||
                     isLoadingJiraProjects ||
@@ -2612,22 +2725,20 @@ export default function HomePage() {
                 }
                 className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"
               >
-                {isPublishingDelivery ? (
-                  <>
-                    <Spinner className="w-3.5 h-3.5" />
-                    Publishing…
-                  </>
+                {isLoadingPreview ? (
+                  <><Spinner className="w-3.5 h-3.5" />Loading…</>
                 ) : (
                   <>
+                    Preview
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
-                    Publish
                   </>
                 )}
               </button>
             </div>
+            </>
+            )}
           </div>
         </div>
       )}
