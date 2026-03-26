@@ -44,3 +44,9 @@ npm run dev
 - Note any new environment variables or external dependencies.
 - Include screenshots or sample output when UI behavior changes.
 - Call out any backward compatibility impact.
+
+## Adding a model adapter
+
+See [docs/model-adapters.md](/Users/sheldon.chang/Tools/ai-dev-ver2/docs/model-adapters.md).
+
+New adapters should be added through the registry in [backend/model_adapters.py](/Users/sheldon.chang/Tools/ai-dev-ver2/backend/model_adapters.py), not by adding more provider branching inside [backend/main.py](/Users/sheldon.chang/Tools/ai-dev-ver2/backend/main.py).

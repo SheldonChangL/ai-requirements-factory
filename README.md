@@ -145,6 +145,11 @@ See `frontend/.env.example`.
 - Claude CLI
 - Codex CLI
 
+## Extending model backends
+
+Model providers are registered through [backend/model_adapters.py](/Users/sheldon.chang/Tools/ai-dev-ver2/backend/model_adapters.py).  
+The adapter contract is documented in [docs/model-adapters.md](/Users/sheldon.chang/Tools/ai-dev-ver2/docs/model-adapters.md).
+
 ## Customizing prompts
 
 Prompt templates are file-based and live under `backend/prompt_profiles/`.

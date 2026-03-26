@@ -4,7 +4,6 @@ import io
 import json as json_lib
 import os
 import sqlite3
-import subprocess
 import urllib.error
 import urllib.request
 from typing import Annotated, TypedDict
@@ -16,12 +15,12 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
+from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
 from prompts import (
     build_architect_prompt,
     build_sa_prompt,
@@ -29,8 +28,6 @@ from prompts import (
     build_user_stories_prompt,
 )
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 CORS_ALLOW_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
@@ -45,116 +42,6 @@ CORS_ALLOW_ORIGINS = [
 conn = sqlite3.connect("ai_factory.db", check_same_thread=False)
 memory = SqliteSaver(conn)
 memory.setup()
-
-
-# ---------------------------------------------------------------------------
-# Model Adapter
-# ---------------------------------------------------------------------------
-
-def model_adapter(model_choice: str, prompt: str) -> str:
-    """
-    Route a prompt to the appropriate AI backend and return the response text.
-
-    Supported model_choice values:
-      - "ollama"      : Uses ChatOllama (llama3) via LangChain
-      - "gemini-cli"  : Uses the `gemini` CLI tool via subprocess
-      - "claude-cli"  : Uses the `claude` CLI tool via subprocess
-      - "codex-cli"   : Uses the `codex` CLI tool via subprocess
-    """
-    model_choice = model_choice.strip().lower()
-
-    # --- Ollama (llama3 via LangChain) ---
-    if model_choice == "ollama":
-        llm = ChatOllama(
-            model=OLLAMA_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.2,
-        )
-        response = llm.invoke(prompt)
-        return response.content
-
-    # --- Gemini CLI ---
-    if model_choice == "gemini-cli":
-        try:
-            result = subprocess.run(
-                ["gemini", "-p", prompt],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                input="",
-            )
-            if result.returncode != 0:
-                stderr_msg = result.stderr.strip() or "unknown error"
-                raise RuntimeError(
-                    f"gemini CLI exited with code {result.returncode}: {stderr_msg}"
-                )
-            output = result.stdout.strip()
-            if not output:
-                raise RuntimeError("gemini CLI returned empty output.")
-            return output
-        except FileNotFoundError:
-            raise RuntimeError(
-                "gemini CLI not found. Install it and ensure it is on your PATH."
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("gemini CLI timed out after 120 seconds.")
-
-    # --- Claude CLI ---
-    if model_choice == "claude-cli":
-        try:
-            result = subprocess.run(
-                ["claude", "-p", prompt],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                input="",
-            )
-            if result.returncode != 0:
-                stderr_msg = result.stderr.strip() or "unknown error"
-                raise RuntimeError(
-                    f"claude CLI exited with code {result.returncode}: {stderr_msg}"
-                )
-            output = result.stdout.strip()
-            if not output:
-                raise RuntimeError("claude CLI returned empty output.")
-            return output
-        except FileNotFoundError:
-            raise RuntimeError(
-                "claude CLI not found. Install it and ensure it is on your PATH."
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("claude CLI timed out after 120 seconds.")
-
-    # --- Codex CLI ---
-    if model_choice == "codex-cli":
-        try:
-            result = subprocess.run(
-                ["codex", "-p", prompt],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                input="",
-            )
-            if result.returncode != 0:
-                stderr_msg = result.stderr.strip() or "unknown error"
-                raise RuntimeError(
-                    f"codex CLI exited with code {result.returncode}: {stderr_msg}"
-                )
-            output = result.stdout.strip()
-            if not output:
-                raise RuntimeError("codex CLI returned empty output.")
-            return output
-        except FileNotFoundError:
-            raise RuntimeError(
-                "codex CLI not found. Install it and ensure it is on your PATH."
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("codex CLI timed out after 120 seconds.")
-
-    raise ValueError(
-        f"Unsupported model_choice '{model_choice}'. "
-        "Valid options: 'ollama', 'gemini-cli', 'claude-cli', 'codex-cli'."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +97,7 @@ def sa_interaction_node(state: SAState) -> SAState:
     )
 
     try:
-        response_text = model_adapter(model_choice, full_prompt)
+        response_text = invoke_model(model_choice, full_prompt)
     except (RuntimeError, ValueError) as exc:
         response_text = (
             f"[ModelAdapter Error] Unable to get a response from '{model_choice}': "
@@ -266,7 +153,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-VALID_MODEL_CHOICES = {"ollama", "gemini-cli", "claude-cli", "codex-cli"}
+VALID_MODEL_CHOICES = set(get_supported_model_choices())
 
 
 class ChatRequest(BaseModel):
@@ -456,7 +343,7 @@ async def generate_architecture(request: GenerateArchitectureRequest):
 
     # Invoke the model (runs in a thread to avoid blocking the event loop)
     try:
-        result = await asyncio.to_thread(model_adapter, model_choice, architect_prompt)
+        result = await asyncio.to_thread(invoke_model, model_choice, architect_prompt)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=500,
@@ -571,7 +458,7 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
 
     # Invoke the model in a thread to avoid blocking the event loop
     try:
-        result = await asyncio.to_thread(model_adapter, model_choice, user_stories_prompt)
+        result = await asyncio.to_thread(invoke_model, model_choice, user_stories_prompt)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=500,
@@ -649,7 +536,7 @@ async def push_to_jira(request: PushToJiraRequest):
     parse_prompt = build_story_parse_prompt(user_stories_draft)
 
     try:
-        raw_json = await asyncio.to_thread(model_adapter, model_choice, parse_prompt)
+        raw_json = await asyncio.to_thread(invoke_model, model_choice, parse_prompt)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=500,
@@ -898,53 +785,20 @@ class ModelsCheckResponse(BaseModel):
     available: list[str]
 
 
-def _check_ollama() -> bool:
-    """Return True if Ollama is running and reachable."""
-    try:
-        req = urllib.request.urlopen(
-            f"{OLLAMA_BASE_URL}/api/tags", timeout=3
-        )
-        return req.status == 200
-    except Exception:
-        return False
-
-
-def _check_cli(cmd: str) -> bool:
-    """Return True if the given CLI tool exists and --version exits cleanly."""
-    try:
-        result = subprocess.run(
-            [cmd, "--version"],
-            capture_output=True,
-            timeout=3,
-            input=b"",
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
 @app.get("/api/models/check", response_model=ModelsCheckResponse)
 async def check_models():
     """
     Probe each supported AI backend and return which ones are reachable.
     Checks run concurrently to minimise latency.
     """
-    ollama_ok, gemini_ok, claude_ok, codex_ok = await asyncio.gather(
-        asyncio.to_thread(_check_ollama),
-        asyncio.to_thread(_check_cli, "gemini"),
-        asyncio.to_thread(_check_cli, "claude"),
-        asyncio.to_thread(_check_cli, "codex"),
+    checks = await asyncio.gather(
+        *(asyncio.to_thread(adapter.is_available) for adapter in MODEL_ADAPTERS.values())
     )
-
-    available: list[str] = []
-    if ollama_ok:
-        available.append("ollama")
-    if gemini_ok:
-        available.append("gemini-cli")
-    if claude_ok:
-        available.append("claude-cli")
-    if codex_ok:
-        available.append("codex-cli")
+    available = [
+        adapter.model_choice
+        for adapter, is_available in zip(MODEL_ADAPTERS.values(), checks)
+        if is_available
+    ]
 
     return ModelsCheckResponse(available=available)
 

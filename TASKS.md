@@ -17,7 +17,7 @@ This file tracks the work needed to turn this repo into a publishable, adoptable
 
 - [x] Extract prompts and templates from the main backend module.
 - [x] Make prompts file-based and profile-selectable for non-developers.
-- [ ] Define a documented model adapter contract for new providers.
+- [x] Define a documented model adapter contract for new providers.
 - [ ] Define a documented export and integration contract.
 - [ ] Add an OpenAI-compatible adapter to reduce adoption friction.
 - [ ] Improve error categories for model, parsing, and Jira failures.
