@@ -642,6 +642,9 @@ export default function HomePage() {
   const [isPublishingDelivery, setIsPublishingDelivery] = useState(false);
   const [deliveryPushResult, setDeliveryPushResult] = useState<DeliveryPushResult | null>(null);
   const [deliveryErrorMsg, setDeliveryErrorMsg]   = useState<string | null>(null);
+  const [jiraProjects, setJiraProjects]           = useState<{ key: string; name: string; id: string }[]>([]);
+  const [selectedJiraProjectKey, setSelectedJiraProjectKey] = useState("");
+  const [isLoadingJiraProjects, setIsLoadingJiraProjects] = useState(false);
 
   // ── Amendment Mode banner ─────────────────────────────────────────────────
   const [amendmentBannerDismissed, setAmendmentBannerDismissed] = useState(false);
@@ -690,9 +693,9 @@ export default function HomePage() {
       setActiveThreadId(stored[0].id);
     }
     setJiraConfig(loadJiraConfig());
-    setJiraToken(loadJiraToken());
     setGitHubConfig(loadGitHubConfig());
-    setGitHubToken(loadGitHubToken());
+    loadJiraToken().then(setJiraToken);
+    loadGitHubToken().then(setGitHubToken);
   }, []);
 
   // ── Hydrate chat state whenever active thread changes ───────────────────
@@ -1122,16 +1125,48 @@ export default function HomePage() {
     }
   };
 
-  const openDeliveryModal = (target: DeliveryTarget) => {
+  const openDeliveryModal = async (target: DeliveryTarget) => {
     setDeliveryTarget(target);
     setShowDeliveryModal(true);
     setDeliveryErrorMsg(null);
+    setJiraProjects([]);
     // Reload config from storage each time the modal opens so it picks up any
     // changes the user may have saved in the Settings page mid-session.
-    setJiraConfig(loadJiraConfig());
-    setJiraToken(loadJiraToken());
-    setGitHubConfig(loadGitHubConfig());
-    setGitHubToken(loadGitHubToken());
+    const freshJiraCfg = loadJiraConfig();
+    const freshGithubCfg = loadGitHubConfig();
+    setJiraConfig(freshJiraCfg);
+    setGitHubConfig(freshGithubCfg);
+    const [freshJiraToken, freshGithubToken] = await Promise.all([
+      loadJiraToken(),
+      loadGitHubToken(),
+    ]);
+    setJiraToken(freshJiraToken);
+    setGitHubToken(freshGithubToken);
+    setSelectedJiraProjectKey(freshJiraCfg.projectKey ?? "");
+
+    // Auto-fetch Jira projects if opening for Jira and credentials are ready
+    if (target === "jira" && freshJiraCfg.domain && freshJiraCfg.email && freshJiraToken) {
+      setIsLoadingJiraProjects(true);
+      try {
+        const params = new URLSearchParams({
+          domain: freshJiraCfg.domain,
+          email: freshJiraCfg.email,
+          token: freshJiraToken,
+        });
+        const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
+        if (res.ok) {
+          const list = await res.json();
+          setJiraProjects(list);
+          if (!freshJiraCfg.projectKey && list.length > 0) {
+            setSelectedJiraProjectKey(list[0].key);
+          }
+        }
+      } catch {
+        // silently ignore — user can still publish with saved projectKey
+      } finally {
+        setIsLoadingJiraProjects(false);
+      }
+    }
   };
 
   // ── Publish delivery target ──────────────────────────────────────────────
@@ -1152,7 +1187,7 @@ export default function HomePage() {
           jira_domain: jiraConfig.domain,
           jira_email: jiraConfig.email,
           jira_token: jiraToken,
-          jira_project_key: jiraConfig.projectKey,
+          jira_project_key: selectedJiraProjectKey || jiraConfig.projectKey,
           github_owner: githubConfig.owner,
           github_repo: githubConfig.repo,
           github_token: githubToken,
@@ -2303,7 +2338,25 @@ export default function HomePage() {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => { setDeliveryTarget("jira"); setDeliveryErrorMsg(null); }}
+                  onClick={async () => {
+                    setDeliveryTarget("jira");
+                    setDeliveryErrorMsg(null);
+                    // Auto-fetch projects if not loaded yet
+                    if (jiraProjects.length === 0 && isJiraConfigured() && jiraToken) {
+                      setIsLoadingJiraProjects(true);
+                      try {
+                        const params = new URLSearchParams({ domain: jiraConfig.domain, email: jiraConfig.email, token: jiraToken });
+                        const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
+                        if (res.ok) {
+                          const list = await res.json();
+                          setJiraProjects(list);
+                          if (!selectedJiraProjectKey && list.length > 0) setSelectedJiraProjectKey(list[0].key);
+                        }
+                      } catch { /* ignore */ } finally {
+                        setIsLoadingJiraProjects(false);
+                      }
+                    }
+                  }}
                   className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "jira" ? "bg-blue-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
                 >
                   Jira
@@ -2320,12 +2373,50 @@ export default function HomePage() {
               {/* Configuration status */}
               {deliveryTarget === "jira" ? (
                 isJiraConfigured() ? (
-                  <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3 space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                      <p className="text-xs font-semibold text-emerald-300">Jira configured</p>
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                        <p className="text-xs font-semibold text-emerald-300">Jira configured</p>
+                      </div>
+                      <p className="text-xs text-zinc-500 font-mono">{jiraConfig.domain}</p>
                     </div>
-                    <p className="text-xs text-zinc-500 font-mono">{jiraConfig.domain} · {jiraConfig.projectKey}</p>
+                    {/* Project selector */}
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                        Project
+                        {isLoadingJiraProjects && (
+                          <span className="ml-2 font-normal text-zinc-600">loading…</span>
+                        )}
+                      </label>
+                      {jiraProjects.length > 0 ? (
+                        <div className="relative">
+                          <select
+                            value={selectedJiraProjectKey}
+                            onChange={(e) => setSelectedJiraProjectKey(e.target.value)}
+                            className="w-full appearance-none bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                          >
+                            <option value="" disabled>Select a project…</option>
+                            {jiraProjects.map((p) => (
+                              <option key={p.id} value={p.key}>{p.name} ({p.key})</option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
+                            <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </div>
+                        </div>
+                      ) : (
+                        <input
+                          type="text"
+                          value={selectedJiraProjectKey}
+                          onChange={(e) => setSelectedJiraProjectKey(e.target.value.toUpperCase())}
+                          placeholder={jiraConfig.projectKey || "e.g. PROJ"}
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 py-3 flex items-start gap-3">
@@ -2397,7 +2488,7 @@ export default function HomePage() {
                 onClick={handlePublishDelivery}
                 disabled={
                   isPublishingDelivery ||
-                  (deliveryTarget === "jira" && !isJiraConfigured()) ||
+                  (deliveryTarget === "jira" && (!isJiraConfigured() || !(selectedJiraProjectKey || jiraConfig.projectKey))) ||
                   (deliveryTarget === "github" && !isGitHubConfigured())
                 }
                 className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"

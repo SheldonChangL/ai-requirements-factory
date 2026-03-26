@@ -3,7 +3,7 @@ import io
 import os
 import sqlite3
 import urllib.error
-from typing import Annotated, TypedDict
+from typing import Annotated, Optional, TypedDict
 
 import fitz  # PyMuPDF
 import openpyxl
@@ -135,7 +135,7 @@ def _delete_stage_messages(thread_id: str) -> None:
     conn.commit()
 
 
-def _extract_stage_content(response_text: str) -> tuple[str, str | None]:
+def _extract_stage_content(response_text: str) -> "tuple[str, Optional[str]]":
     """
     Split agent response into (conversational_part, updated_artifact | None).
 
@@ -1014,7 +1014,7 @@ class StageChatRequest(BaseModel):
 
 class StageChatResponse(BaseModel):
     ai_response: str
-    updated_content: str | None = None
+    updated_content: Optional[str] = None
 
 
 class StageHistoryMessage(BaseModel):
