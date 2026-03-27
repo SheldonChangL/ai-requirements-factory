@@ -23,6 +23,15 @@
 - [x] Add explicit stage status fields such as `draft`, `approved`, `needs_revision`.
 - [ ] Prepare the workflow model for future pluggable stages beyond the current three.
 
+## Next Phase Candidates
+
+- [ ] Add actor identity so approvals, comments, revisions, and delivery actions record who performed them.
+- [ ] Add optimistic locking or stage version checks to prevent stale-tab overwrites.
+- [ ] Add background refresh or lightweight real-time sync for shared projects.
+- [ ] Add threaded review discussion and reviewer ownership on stage notes.
+- [ ] Replace hard-coded stage assumptions with a stage registry / config model.
+- [ ] Add at least one more delivery target such as Linear or export-to-file.
+
 ## Delivery Integrations
 
 - [x] Add delivery preview UI before publish for Jira and GitHub.

@@ -89,4 +89,5 @@
 - The current implementation now covers staged editing, staged status control, structured review notes, revision metadata, activity history, delivery preview, encrypted integration credentials, and settings-based integration management.
 - Direct edit governance is stronger now that reviewed content is applied explicitly instead of being saved immediately.
 - Prompt construction is more stable across models because long histories and large artifacts are compacted before invocation.
-- The next major improvement should focus on workflow extensibility and broader delivery/export targets.
+- This state should be treated as the completed public alpha workflow-foundation milestone.
+- The next major improvement should focus on team collaboration primitives and workflow extensibility.
