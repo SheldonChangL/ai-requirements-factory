@@ -13,7 +13,7 @@ That milestone includes:
 - stage status, review notes, revision logs, and dependency-aware summaries
 - baseline open-source packaging and CI/community scaffolding
 
-See [docs/project/milestones.md](/Users/sheldon.chang/Tools/ai-dev-ver2/docs/project/milestones.md) for the formal checkpoint.
+See `docs/project/milestones.md` for the formal checkpoint.
 
 ## Next phase: Team workflow and extensibility
 
