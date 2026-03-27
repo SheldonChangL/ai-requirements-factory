@@ -754,16 +754,33 @@ function StageSummaryPanel({
   const upstream = current.blocked_by;
   const downstream = current.downstream_stages;
   const impacted = current.downstream_impacted;
+  const flowStages: WorkspaceStage[] = ["prd", "architecture", "stories"];
 
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Stage Flow</p>
-          <h3 className="mt-1 text-sm font-semibold text-zinc-100">{stageLabel(currentStage)} summary</h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            {current.last_revision_summary || "No formal revision record yet."}
-          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            {flowStages.map((stage, index) => (
+              <div key={stage} className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onJump(stage)}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    stage === currentStage
+                      ? "border-zinc-500 bg-zinc-800 text-zinc-100"
+                      : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                  }`}
+                >
+                  {stageLabel(stage)}
+                </button>
+                {index < flowStages.length - 1 ? (
+                  <span className="text-zinc-700">→</span>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
           <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-zinc-300">
@@ -780,37 +797,14 @@ function StageSummaryPanel({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
-        {(Object.keys(summaries) as WorkspaceStage[]).map((stage) => {
-          const summary = summaries[stage];
-          return (
-            <button
-              key={stage}
-              type="button"
-              onClick={() => onJump(stage)}
-              className={`rounded-xl border px-3 py-3 text-left transition-colors ${
-                stage === currentStage
-                  ? "border-zinc-600 bg-zinc-800/90"
-                  : "border-zinc-800 bg-zinc-950/30 hover:border-zinc-700 hover:bg-zinc-900/70"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-semibold text-zinc-100">{stageLabel(stage)}</span>
-                <span className={`h-2.5 w-2.5 rounded-full ${summary.has_content ? "bg-emerald-400" : "bg-zinc-700"}`} />
-              </div>
-              <p className="mt-2 text-xs text-zinc-500">{summary.last_revision_summary || "No revisions yet"}</p>
-              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-500">
-                <span>{formatRevisionSource(summary.last_revision_source)}</span>
-                {summary.last_updated_at ? (
-                  <span>{new Date(summary.last_updated_at * 1000).toLocaleString()}</span>
-                ) : null}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Current Stage</p>
+          <p className="mt-2 text-sm font-semibold text-zinc-100">{stageLabel(currentStage)}</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {current.last_revision_summary || "No formal revision record yet."}
+          </p>
+        </div>
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Depends On</p>
           {upstream.length === 0 ? (
@@ -844,6 +838,11 @@ function StageSummaryPanel({
           <p className="mt-2 text-sm text-zinc-300">
             {current.last_revision_reviewed ? "Latest revision was reviewed before apply." : "Latest revision was not review-applied."}
           </p>
+          {current.last_updated_at ? (
+            <p className="mt-2 text-xs text-zinc-500">
+              Last update: {new Date(current.last_updated_at * 1000).toLocaleString()}
+            </p>
+          ) : null}
           {impacted.length > 0 ? (
             <p className="mt-2 text-xs text-amber-300">
               Downstream impact: {impacted.map((stage) => stageLabel(stage)).join(", ")}
@@ -851,6 +850,12 @@ function StageSummaryPanel({
           ) : null}
         </div>
       </div>
+
+      {current.stale ? (
+        <div className="mt-3 rounded-xl border border-amber-700/40 bg-amber-950/20 px-4 py-3 text-xs text-amber-300">
+          Upstream content changed after this stage. Review the current draft before treating it as ready.
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2960,7 +2965,7 @@ export default function HomePage() {
                   key={stage.key}
                   type="button"
                   onClick={() => setActiveWorkspaceStage(stage.key)}
-                  className={`rounded-2xl border px-4 py-3 text-left transition-all ${
+                  className={`rounded-2xl border px-4 py-2.5 text-left transition-all ${
                     activeWorkspaceStage === stage.key
                       ? "border-zinc-500 bg-zinc-800/90 shadow-lg shadow-black/20"
                       : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-700 hover:bg-zinc-800/60"
@@ -2980,7 +2985,7 @@ export default function HomePage() {
                       {stage.key === "prd" ? "PRD" : stage.key === "architecture" ? "ARC" : "USR"}
                     </span>
                   </div>
-                  <div className="mt-3 flex items-center gap-2 text-[11px] text-zinc-500">
+                  <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
                     <span className={`h-2 w-2 rounded-full ${stage.ready ? "bg-emerald-400" : "bg-zinc-700"}`} />
                     {stage.ready ? "Available" : "Pending"}
                   </div>
