@@ -188,7 +188,7 @@ section "Starting Frontend (Next.js on :3000)"
 truncate -s 0 "$FRONTEND_LOG"
 
 cd "$FRONTEND_DIR"
-nohup npm run dev \
+nohup npm run dev -- --hostname 0.0.0.0 \
   < /dev/null > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
 disown "$FRONTEND_PID" 2>/dev/null || true

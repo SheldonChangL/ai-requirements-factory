@@ -3,6 +3,7 @@ import io
 import os
 import sqlite3
 import urllib.error
+from uuid import uuid4
 from typing import Annotated, Optional, TypedDict
 
 import fitz  # PyMuPDF
@@ -101,6 +102,16 @@ CONTENT_START_MARKER = "[CONTENT_START]"
 CONTENT_END_MARKER   = "[CONTENT_END]"
 
 conn.execute("""
+    CREATE TABLE IF NOT EXISTS projects (
+        thread_id  TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        created_at REAL NOT NULL DEFAULT (strftime('%s','now'))
+    )
+""")
+conn.execute(
+    "CREATE INDEX IF NOT EXISTS idx_projects_created_at ON projects (created_at, thread_id)"
+)
+conn.execute("""
     CREATE TABLE IF NOT EXISTS stage_messages (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         thread_id  TEXT    NOT NULL,
@@ -135,7 +146,50 @@ conn.execute("""
 conn.execute(
     "CREATE INDEX IF NOT EXISTS idx_stage_events ON stage_events (thread_id, stage, id)"
 )
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS stage_comments (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id   TEXT    NOT NULL,
+        stage       TEXT    NOT NULL,
+        body        TEXT    NOT NULL,
+        status      TEXT    NOT NULL DEFAULT 'open',
+        created_at  REAL    NOT NULL DEFAULT (strftime('%s','now')),
+        resolved_at REAL
+    )
+""")
+conn.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stage_comments ON stage_comments (thread_id, stage, id)"
+)
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS stage_revisions (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id        TEXT    NOT NULL,
+        stage            TEXT    NOT NULL,
+        source           TEXT    NOT NULL,
+        summary          TEXT    NOT NULL DEFAULT '',
+        instruction      TEXT    NOT NULL DEFAULT '',
+        reviewed         INTEGER NOT NULL DEFAULT 0,
+        downstream_reset TEXT    NOT NULL DEFAULT '',
+        content_length   INTEGER NOT NULL DEFAULT 0,
+        created_at       REAL    NOT NULL DEFAULT (strftime('%s','now'))
+    )
+""")
+conn.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stage_revisions ON stage_revisions (thread_id, stage, id)"
+)
 conn.commit()
+
+STAGE_KEYS = ("prd", "architecture", "stories")
+STAGE_DEPENDENCIES: dict[str, list[str]] = {
+    "prd": [],
+    "architecture": ["prd"],
+    "stories": ["architecture"],
+}
+STAGE_DOWNSTREAM: dict[str, list[str]] = {
+    "prd": ["architecture", "stories"],
+    "architecture": ["stories"],
+    "stories": [],
+}
 
 
 def _get_stage_status(thread_id: str, stage: str) -> str:
@@ -178,6 +232,161 @@ def _load_stage_events(thread_id: str, stage: str) -> list[dict]:
     return [{"event_type": row[0], "detail": row[1], "created_at": row[2]} for row in rows]
 
 
+def _record_stage_revision(
+    thread_id: str,
+    stage: str,
+    source: str,
+    *,
+    summary: str = "",
+    instruction: str = "",
+    reviewed: bool = False,
+    downstream_reset: Optional[list[str]] = None,
+    content_length: int = 0,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO stage_revisions (
+            thread_id, stage, source, summary, instruction, reviewed, downstream_reset, content_length
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            thread_id,
+            stage,
+            source,
+            summary.strip(),
+            instruction.strip(),
+            1 if reviewed else 0,
+            ",".join(downstream_reset or []),
+            content_length,
+        ),
+    )
+    conn.commit()
+
+
+def _load_stage_revisions(thread_id: str, stage: str, limit: int = 20) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, source, summary, instruction, reviewed, downstream_reset, content_length, created_at
+        FROM stage_revisions
+        WHERE thread_id=? AND stage=?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (thread_id, stage, limit),
+    ).fetchall()
+    return [
+        {
+            "id": row[0],
+            "source": row[1],
+            "summary": row[2],
+            "instruction": row[3],
+            "reviewed": bool(row[4]),
+            "downstream_reset": [item for item in row[5].split(",") if item],
+            "content_length": row[6],
+            "created_at": row[7],
+        }
+        for row in rows
+    ]
+
+
+def _get_latest_stage_revision(thread_id: str, stage: str) -> Optional[dict]:
+    revisions = _load_stage_revisions(thread_id, stage, limit=1)
+    return revisions[0] if revisions else None
+
+
+def _get_latest_stage_timestamp(thread_id: str, stage: str) -> Optional[float]:
+    revision_row = conn.execute(
+        "SELECT created_at FROM stage_revisions WHERE thread_id=? AND stage=? ORDER BY id DESC LIMIT 1",
+        (thread_id, stage),
+    ).fetchone()
+    if revision_row:
+        return float(revision_row[0])
+    event_row = conn.execute(
+        "SELECT created_at FROM stage_events WHERE thread_id=? AND stage=? ORDER BY id DESC LIMIT 1",
+        (thread_id, stage),
+    ).fetchone()
+    if event_row:
+        return float(event_row[0])
+    return None
+
+
+def _load_stage_comments(thread_id: str, stage: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, body, status, created_at, resolved_at
+        FROM stage_comments
+        WHERE thread_id=? AND stage=?
+        ORDER BY
+            CASE status WHEN 'open' THEN 0 ELSE 1 END,
+            id DESC
+        """,
+        (thread_id, stage),
+    ).fetchall()
+    return [
+        {
+            "id": row[0],
+            "body": row[1],
+            "status": row[2],
+            "created_at": row[3],
+            "resolved_at": row[4],
+        }
+        for row in rows
+    ]
+
+
+def _create_stage_comment(thread_id: str, stage: str, body: str) -> dict:
+    cursor = conn.execute(
+        "INSERT INTO stage_comments (thread_id, stage, body) VALUES (?, ?, ?)",
+        (thread_id, stage, body.strip()),
+    )
+    conn.commit()
+    comment_id = cursor.lastrowid
+    row = conn.execute(
+        """
+        SELECT id, body, status, created_at, resolved_at
+        FROM stage_comments
+        WHERE id=?
+        """,
+        (comment_id,),
+    ).fetchone()
+    return {
+        "id": row[0],
+        "body": row[1],
+        "status": row[2],
+        "created_at": row[3],
+        "resolved_at": row[4],
+    }
+
+
+def _update_stage_comment_status(comment_id: int, status: str) -> Optional[dict]:
+    resolved_at_sql = "strftime('%s','now')" if status == "resolved" else "NULL"
+    conn.execute(
+        f"UPDATE stage_comments SET status=?, resolved_at={resolved_at_sql} WHERE id=?",
+        (status, comment_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        """
+        SELECT id, thread_id, stage, body, status, created_at, resolved_at
+        FROM stage_comments
+        WHERE id=?
+        """,
+        (comment_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "thread_id": row[1],
+        "stage": row[2],
+        "body": row[3],
+        "status": row[4],
+        "created_at": row[5],
+        "resolved_at": row[6],
+    }
+
+
 def _load_stage_messages(thread_id: str, stage: str) -> list[dict]:
     rows = conn.execute(
         "SELECT role, content FROM stage_messages WHERE thread_id=? AND stage=? ORDER BY id",
@@ -198,7 +407,80 @@ def _delete_stage_messages(thread_id: str) -> None:
     conn.execute("DELETE FROM stage_messages WHERE thread_id=?", (thread_id,))
     conn.execute("DELETE FROM stage_status WHERE thread_id=?", (thread_id,))
     conn.execute("DELETE FROM stage_events WHERE thread_id=?", (thread_id,))
+    conn.execute("DELETE FROM stage_comments WHERE thread_id=?", (thread_id,))
+    conn.execute("DELETE FROM stage_revisions WHERE thread_id=?", (thread_id,))
     conn.commit()
+
+
+def _list_projects() -> list[dict[str, str]]:
+    rows = conn.execute(
+        "SELECT thread_id, name FROM projects ORDER BY created_at ASC, thread_id ASC"
+    ).fetchall()
+    return [{"id": row[0], "name": row[1]} for row in rows]
+
+
+def _upsert_project(thread_id: str, name: str) -> None:
+    conn.execute(
+        """INSERT INTO projects (thread_id, name, created_at)
+           VALUES (?, ?, strftime('%s','now'))
+           ON CONFLICT(thread_id) DO UPDATE SET name=excluded.name""",
+        (thread_id, name),
+    )
+    conn.commit()
+
+
+def _delete_project_record(thread_id: str) -> None:
+    conn.execute("DELETE FROM projects WHERE thread_id=?", (thread_id,))
+    conn.commit()
+
+
+def _delete_thread_state(thread_id: str) -> None:
+    for table in ("checkpoints", "checkpoint_writes"):
+        try:
+            conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+            conn.commit()
+        except sqlite3.Error:
+            pass
+    _delete_stage_messages(thread_id)
+    _delete_project_record(thread_id)
+
+
+def _normalize_change_source(change_source: str) -> str:
+    normalized = change_source.strip().lower() if change_source else "manual_edit"
+    if normalized not in {"manual_edit", "ai_revision"}:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "invalid_input",
+                "change_source must be one of: manual_edit, ai_revision.",
+            ),
+        )
+    return normalized
+
+
+def _event_type_for_change_source(change_source: str) -> str:
+    return "ai_revised" if change_source == "ai_revision" else "manually_edited"
+
+
+def _default_revision_summary(stage: str, change_source: str, change_context: str) -> str:
+    context = (change_context or "").strip().lower()
+    if context == "stage_chat":
+        return f"{stage.title()} updated from stage discussion"
+    if context == "ai_refine":
+        return f"{stage.title()} updated from AI revision"
+    if context == "manual_edit":
+        return f"{stage.title()} updated manually"
+    return f"{stage.title()} updated by {'AI' if change_source == 'ai_revision' else 'manual edit'}"
+
+
+def _stage_has_content(artifacts: ProjectArtifacts, stage: str) -> bool:
+    if stage == "prd":
+        return bool(artifacts.prd.strip())
+    if stage == "architecture":
+        return bool(artifacts.architecture.strip())
+    if stage == "stories":
+        return bool(artifacts.user_stories.strip())
+    return False
 
 
 def _extract_stage_content(response_text: str) -> "tuple[str, Optional[str]]":
@@ -252,6 +534,7 @@ def sa_interaction_node(state: SAState) -> SAState:
     conversation_text = "\n".join(history_lines)
 
     full_prompt = build_sa_prompt(
+        model_choice=model_choice,
         conversation_text=conversation_text,
         existing_prd=existing_prd,
         already_ready=already_ready,
@@ -574,6 +857,52 @@ class ThreadStateResponse(BaseModel):
     user_stories_draft: str
 
 
+class ProjectSummary(BaseModel):
+    id: str
+    name: str
+
+
+class ProjectsListResponse(BaseModel):
+    projects: list[ProjectSummary]
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    thread_id: Optional[str] = None
+
+
+class CreateProjectResponse(BaseModel):
+    project: ProjectSummary
+
+
+@app.get("/api/projects", response_model=ProjectsListResponse)
+async def list_projects():
+    return ProjectsListResponse(
+        projects=[ProjectSummary(**project) for project in _list_projects()]
+    )
+
+
+@app.post("/api/projects", response_model=CreateProjectResponse)
+async def create_project(request: CreateProjectRequest):
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "Project name cannot be empty."),
+        )
+
+    thread_id = (request.thread_id or "").strip() or uuid4().hex
+    try:
+        _upsert_project(thread_id, name)
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("state_error", f"Failed to persist project metadata: {exc}"),
+        ) from exc
+
+    return CreateProjectResponse(project=ProjectSummary(id=thread_id, name=name))
+
+
 @app.get("/api/chat/{thread_id}", response_model=ThreadStateResponse)
 async def get_thread_state(thread_id: str):
     """Return the persisted conversation state for a given thread_id."""
@@ -613,6 +942,10 @@ async def get_thread_state(thread_id: str):
 
 class UpdatePrdRequest(BaseModel):
     content: str
+    change_source: str = "manual_edit"
+    reviewed: bool = False
+    instruction: str = ""
+    change_context: str = ""
 
 
 class UpdatePrdResponse(BaseModel):
@@ -629,6 +962,7 @@ async def update_prd(thread_id: str, request: UpdatePrdRequest):
             status_code=400,
             detail=error_detail("invalid_input", "PRD content cannot be empty."),
         )
+    change_source = _normalize_change_source(request.change_source)
 
     config = {"configurable": {"thread_id": thread_id}}
     try:
@@ -649,6 +983,20 @@ async def update_prd(thread_id: str, request: UpdatePrdRequest):
                 f"Failed to persist PRD for thread '{thread_id}': {exc}",
             ),
         )
+    _reset_stage_status(thread_id, "prd")
+    _reset_stage_status(thread_id, "architecture")
+    _reset_stage_status(thread_id, "stories")
+    _record_stage_event(thread_id, "prd", _event_type_for_change_source(change_source))
+    _record_stage_revision(
+        thread_id,
+        "prd",
+        change_source,
+        summary=_default_revision_summary("prd", change_source, request.change_context),
+        instruction=request.instruction,
+        reviewed=request.reviewed,
+        downstream_reset=STAGE_DOWNSTREAM["prd"],
+        content_length=len(content),
+    )
     return UpdatePrdResponse(success=True, prd_draft=content, is_ready=True)
 
 
@@ -656,6 +1004,7 @@ class RefinePrdRequest(BaseModel):
     thread_id: str
     model_choice: str = "ollama"
     instruction: str
+    preview_only: bool = False
 
 
 class RefinePrdResponse(BaseModel):
@@ -673,7 +1022,11 @@ async def refine_prd(request: RefinePrdRequest):
 
     model_choice = validate_model_choice(request.model_choice)
     existing_prd = require_prd(request.thread_id)
-    prompt = build_prd_refine_prompt(existing_prd, request.instruction.strip())
+    prompt = build_prd_refine_prompt(
+        model_choice=model_choice,
+        prd_draft=existing_prd,
+        instruction=request.instruction.strip(),
+    )
 
     try:
         result = await asyncio.to_thread(invoke_model, model_choice, prompt)
@@ -684,6 +1037,9 @@ async def refine_prd(request: RefinePrdRequest):
         )
 
     updated_prd = result.replace("[PRD_READY]", "").rstrip()
+    if request.preview_only:
+        return RefinePrdResponse(prd_draft=updated_prd, is_ready=True)
+
     config = {"configurable": {"thread_id": request.thread_id}}
     try:
         graph.update_state(
@@ -705,6 +1061,16 @@ async def refine_prd(request: RefinePrdRequest):
     _reset_stage_status(request.thread_id, "architecture")
     _reset_stage_status(request.thread_id, "stories")
     _record_stage_event(request.thread_id, "prd", "ai_revised")
+    _record_stage_revision(
+        request.thread_id,
+        "prd",
+        "ai_revision",
+        summary="PRD updated from AI revision",
+        instruction=request.instruction,
+        reviewed=not request.preview_only,
+        downstream_reset=STAGE_DOWNSTREAM["prd"],
+        content_length=len(updated_prd),
+    )
     return RefinePrdResponse(prd_draft=updated_prd, is_ready=True)
 
 
@@ -716,21 +1082,25 @@ class DeleteThreadResponse(BaseModel):
 @app.delete("/api/chat/{thread_id}", response_model=DeleteThreadResponse)
 async def delete_thread(thread_id: str):
     """Delete all persisted checkpoint data for a given thread_id."""
-    # Clean up LangGraph checkpoint tables (may not exist in all environments)
-    for table in ("checkpoints", "checkpoint_writes"):
-        try:
-            conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
-            conn.commit()
-        except sqlite3.Error:
-            pass  # table may not exist in some environments
-    # Always clean up stage data
     try:
-        _delete_stage_messages(thread_id)
+        _delete_thread_state(thread_id)
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=500,
             detail=error_detail("state_error", f"Failed to delete thread '{thread_id}': {exc}"),
         )
+    return DeleteThreadResponse(success=True, thread_id=thread_id)
+
+
+@app.delete("/api/projects/{thread_id}", response_model=DeleteThreadResponse)
+async def delete_project(thread_id: str):
+    try:
+        _delete_thread_state(thread_id)
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("state_error", f"Failed to delete project '{thread_id}': {exc}"),
+        ) from exc
     return DeleteThreadResponse(success=True, thread_id=thread_id)
 
 
@@ -788,7 +1158,10 @@ async def generate_architecture(request: GenerateArchitectureRequest):
             detail=error_detail("missing_prd", "PRD is not ready yet."),
         )
 
-    architect_prompt = build_architect_prompt(prd_draft)
+    architect_prompt = build_architect_prompt(
+        model_choice=model_choice,
+        prd_draft=prd_draft,
+    )
 
     # Invoke the model (runs in a thread to avoid blocking the event loop)
     try:
@@ -811,6 +1184,15 @@ async def generate_architecture(request: GenerateArchitectureRequest):
     _reset_stage_status(request.thread_id, "architecture")
     _reset_stage_status(request.thread_id, "stories")
     _record_stage_event(request.thread_id, "architecture", "generated")
+    _record_stage_revision(
+        request.thread_id,
+        "architecture",
+        "generated",
+        summary="Architecture generated from approved PRD",
+        reviewed=False,
+        downstream_reset=STAGE_DOWNSTREAM["architecture"],
+        content_length=len(result),
+    )
     return GenerateArchitectureResponse(architecture_draft=result)
 
 
@@ -820,6 +1202,10 @@ async def generate_architecture(request: GenerateArchitectureRequest):
 
 class UpdateArchitectureRequest(BaseModel):
     content: str
+    change_source: str = "manual_edit"
+    reviewed: bool = False
+    instruction: str = ""
+    change_context: str = ""
 
 
 class UpdateArchitectureResponse(BaseModel):
@@ -833,6 +1219,7 @@ async def update_architecture(thread_id: str, request: UpdateArchitectureRequest
     Persist a manually-edited architecture draft.
     Also clears user_stories_draft since it would be stale after an architecture edit.
     """
+    change_source = _normalize_change_source(request.change_source)
     config = {"configurable": {"thread_id": thread_id}}
     try:
         graph.update_state(
@@ -852,7 +1239,17 @@ async def update_architecture(thread_id: str, request: UpdateArchitectureRequest
         )
     _reset_stage_status(thread_id, "architecture")
     _reset_stage_status(thread_id, "stories")
-    _record_stage_event(thread_id, "architecture", "manually_edited")
+    _record_stage_event(thread_id, "architecture", _event_type_for_change_source(change_source))
+    _record_stage_revision(
+        thread_id,
+        "architecture",
+        change_source,
+        summary=_default_revision_summary("architecture", change_source, request.change_context),
+        instruction=request.instruction,
+        reviewed=request.reviewed,
+        downstream_reset=STAGE_DOWNSTREAM["architecture"],
+        content_length=len(request.content),
+    )
     return UpdateArchitectureResponse(success=True, architecture_draft=request.content)
 
 
@@ -860,6 +1257,7 @@ class RefineArchitectureRequest(BaseModel):
     thread_id: str
     model_choice: str = "ollama"
     instruction: str
+    preview_only: bool = False
 
 
 class RefineArchitectureResponse(BaseModel):
@@ -878,9 +1276,10 @@ async def refine_architecture(request: RefineArchitectureRequest):
     prd_draft = require_prd(request.thread_id)
     architecture_draft = require_architecture(request.thread_id)
     prompt = build_architecture_refine_prompt(
-        prd_draft,
-        architecture_draft,
-        request.instruction.strip(),
+        model_choice=model_choice,
+        prd_draft=prd_draft,
+        architecture_draft=architecture_draft,
+        instruction=request.instruction.strip(),
     )
 
     try:
@@ -890,6 +1289,9 @@ async def refine_architecture(request: RefineArchitectureRequest):
             status_code=500,
             detail=error_detail("model_error", f"Architecture refine failed: {exc}"),
         )
+
+    if request.preview_only:
+        return RefineArchitectureResponse(architecture_draft=result)
 
     config = {"configurable": {"thread_id": request.thread_id}}
     try:
@@ -906,6 +1308,17 @@ async def refine_architecture(request: RefineArchitectureRequest):
             detail=error_detail("state_error", f"Failed to persist refined architecture: {exc}"),
         )
 
+    _record_stage_event(request.thread_id, "architecture", "ai_revised")
+    _record_stage_revision(
+        request.thread_id,
+        "architecture",
+        "ai_revision",
+        summary="Architecture updated from AI revision",
+        instruction=request.instruction,
+        reviewed=not request.preview_only,
+        downstream_reset=STAGE_DOWNSTREAM["architecture"],
+        content_length=len(result),
+    )
     return RefineArchitectureResponse(architecture_draft=result)
 
 
@@ -970,6 +1383,7 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
     prd_draft = state_snapshot.values.get("prd_draft", "").strip()
 
     user_stories_prompt = build_user_stories_prompt(
+        model_choice=model_choice,
         prd_draft=prd_draft,
         architecture_draft=architecture_draft,
     )
@@ -994,11 +1408,24 @@ async def generate_user_stories(request: GenerateUserStoriesRequest):
 
     _reset_stage_status(request.thread_id, "stories")
     _record_stage_event(request.thread_id, "stories", "generated")
+    _record_stage_revision(
+        request.thread_id,
+        "stories",
+        "generated",
+        summary="User stories generated from architecture",
+        reviewed=False,
+        downstream_reset=STAGE_DOWNSTREAM["stories"],
+        content_length=len(result),
+    )
     return GenerateUserStoriesResponse(user_stories_draft=result)
 
 
 class UpdateUserStoriesRequest(BaseModel):
     content: str
+    change_source: str = "manual_edit"
+    reviewed: bool = False
+    instruction: str = ""
+    change_context: str = ""
 
 
 class UpdateUserStoriesResponse(BaseModel):
@@ -1014,6 +1441,7 @@ async def update_user_stories(thread_id: str, request: UpdateUserStoriesRequest)
             status_code=400,
             detail=error_detail("invalid_input", "User stories content cannot be empty."),
         )
+    change_source = _normalize_change_source(request.change_source)
 
     config = {"configurable": {"thread_id": thread_id}}
     try:
@@ -1027,7 +1455,17 @@ async def update_user_stories(thread_id: str, request: UpdateUserStoriesRequest)
             ),
         )
     _reset_stage_status(thread_id, "stories")
-    _record_stage_event(thread_id, "stories", "manually_edited")
+    _record_stage_event(thread_id, "stories", _event_type_for_change_source(change_source))
+    _record_stage_revision(
+        thread_id,
+        "stories",
+        change_source,
+        summary=_default_revision_summary("stories", change_source, request.change_context),
+        instruction=request.instruction,
+        reviewed=request.reviewed,
+        downstream_reset=STAGE_DOWNSTREAM["stories"],
+        content_length=len(content),
+    )
     return UpdateUserStoriesResponse(success=True, user_stories_draft=content)
 
 
@@ -1035,6 +1473,7 @@ class RefineUserStoriesRequest(BaseModel):
     thread_id: str
     model_choice: str = "ollama"
     instruction: str
+    preview_only: bool = False
 
 
 class RefineUserStoriesResponse(BaseModel):
@@ -1054,10 +1493,11 @@ async def refine_user_stories(request: RefineUserStoriesRequest):
     architecture_draft = require_architecture(request.thread_id)
     user_stories_draft = require_user_stories(request.thread_id)
     prompt = build_user_stories_refine_prompt(
-        prd_draft,
-        architecture_draft,
-        user_stories_draft,
-        request.instruction.strip(),
+        model_choice=model_choice,
+        prd_draft=prd_draft,
+        architecture_draft=architecture_draft,
+        user_stories_draft=user_stories_draft,
+        instruction=request.instruction.strip(),
     )
 
     try:
@@ -1067,6 +1507,9 @@ async def refine_user_stories(request: RefineUserStoriesRequest):
             status_code=500,
             detail=error_detail("model_error", f"User stories refine failed: {exc}"),
         )
+
+    if request.preview_only:
+        return RefineUserStoriesResponse(user_stories_draft=result)
 
     config = {"configurable": {"thread_id": request.thread_id}}
     try:
@@ -1079,6 +1522,16 @@ async def refine_user_stories(request: RefineUserStoriesRequest):
 
     _reset_stage_status(request.thread_id, "stories")
     _record_stage_event(request.thread_id, "stories", "ai_revised")
+    _record_stage_revision(
+        request.thread_id,
+        "stories",
+        "ai_revision",
+        summary="User stories updated from AI revision",
+        instruction=request.instruction,
+        reviewed=not request.preview_only,
+        downstream_reset=STAGE_DOWNSTREAM["stories"],
+        content_length=len(result),
+    )
     return RefineUserStoriesResponse(user_stories_draft=result)
 
 
@@ -1093,6 +1546,7 @@ class StageChatRequest(BaseModel):
     thread_id: str
     user_input: str
     model_choice: str = "ollama"
+    preview_only: bool = False
 
 
 class StageChatResponse(BaseModel):
@@ -1152,16 +1606,20 @@ async def stage_chat(stage: str, request: StageChatRequest):
 
     if stage == "architecture":
         prompt = build_arch_chat_prompt(
+            model_choice=model_choice,
             prd_draft=prd_draft,
             architecture_draft=architecture_draft,
             conversation_text=conversation_text,
+            latest_user_input=request.user_input.strip(),
         )
     else:
         prompt = build_stories_chat_prompt(
+            model_choice=model_choice,
             prd_draft=prd_draft,
             architecture_draft=architecture_draft,
             user_stories_draft=user_stories_draft,
             conversation_text=conversation_text,
+            latest_user_input=request.user_input.strip(),
         )
 
     try:
@@ -1176,7 +1634,8 @@ async def stage_chat(stage: str, request: StageChatRequest):
     _append_stage_message(request.thread_id, stage, "assistant", ai_message)
 
     # Persist updated artifact back to main thread if the agent produced one
-    if updated_content:
+    # and the caller explicitly requested apply mode.
+    if updated_content and not request.preview_only:
         main_config = {"configurable": {"thread_id": request.thread_id}}
         state_update = (
             {"architecture_draft": updated_content, "user_stories_draft": ""}
@@ -1187,17 +1646,27 @@ async def stage_chat(stage: str, request: StageChatRequest):
             graph.update_state(main_config, state_update)
             # Content was updated by AI — reset approval
             stage_key = "stories" if stage == "stories" else stage
-            _reset_stage_status(thread_id, stage_key)
+            _reset_stage_status(request.thread_id, stage_key)
             if stage == "architecture":
-                _reset_stage_status(thread_id, "stories")
+                _reset_stage_status(request.thread_id, "stories")
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
                 detail=error_detail("state_error", f"Failed to persist updated {stage}: {exc}"),
             )
 
-    if updated_content is not None:
-        _record_stage_event(thread_id, stage, "ai_revised")
+    if updated_content is not None and not request.preview_only:
+        _record_stage_event(request.thread_id, stage, "ai_revised")
+        _record_stage_revision(
+            request.thread_id,
+            stage,
+            "ai_revision",
+            summary=f"{stage.title()} updated from stage discussion",
+            instruction=request.user_input.strip(),
+            reviewed=False,
+            downstream_reset=STAGE_DOWNSTREAM["stories"] if stage == "architecture" else STAGE_DOWNSTREAM[stage],
+            content_length=len(updated_content),
+        )
     return StageChatResponse(ai_response=ai_message, updated_content=updated_content)
 
 
@@ -1526,12 +1995,179 @@ class StageEventsResponse(BaseModel):
     events: list[StageEventItem]
 
 
+class StageRevisionItem(BaseModel):
+    id: int
+    source: str
+    summary: str
+    instruction: str
+    reviewed: bool
+    downstream_reset: list[str]
+    content_length: int
+    created_at: float
+
+
+class StageRevisionsResponse(BaseModel):
+    revisions: list[StageRevisionItem]
+
+
+class StageCommentItem(BaseModel):
+    id: int
+    body: str
+    status: str
+    created_at: float
+    resolved_at: Optional[float] = None
+
+
+class StageCommentsResponse(BaseModel):
+    comments: list[StageCommentItem]
+
+
+class CreateStageCommentRequest(BaseModel):
+    body: str
+
+
+class CreateStageCommentResponse(BaseModel):
+    comment: StageCommentItem
+
+
+class UpdateStageCommentRequest(BaseModel):
+    status: str
+
+
+class StageSummaryItem(BaseModel):
+    stage: str
+    status: str
+    has_content: bool
+    blocked_by: list[str]
+    downstream_stages: list[str]
+    downstream_impacted: list[str]
+    stale: bool
+    open_comments: int
+    last_updated_at: Optional[float] = None
+    last_revision_source: Optional[str] = None
+    last_revision_summary: Optional[str] = None
+    last_revision_reviewed: bool = False
+
+
+class StageSummariesResponse(BaseModel):
+    prd: StageSummaryItem
+    architecture: StageSummaryItem
+    stories: StageSummaryItem
+
+
 @app.get("/api/stage/{stage}/events/{thread_id}", response_model=StageEventsResponse)
 async def get_stage_events(stage: str, thread_id: str):
-    if stage not in ("prd", "architecture", "stories"):
+    if stage not in STAGE_KEYS:
         raise HTTPException(status_code=400, detail=error_detail("invalid_stage", "Invalid stage"))
     events = _load_stage_events(thread_id, stage)
     return StageEventsResponse(events=[StageEventItem(**e) for e in events])
+
+
+@app.get("/api/stage/{stage}/revisions/{thread_id}", response_model=StageRevisionsResponse)
+async def get_stage_revisions(stage: str, thread_id: str):
+    if stage not in STAGE_KEYS:
+        raise HTTPException(status_code=400, detail=error_detail("invalid_stage", "Invalid stage"))
+    revisions = _load_stage_revisions(thread_id, stage)
+    return StageRevisionsResponse(revisions=[StageRevisionItem(**revision) for revision in revisions])
+
+
+@app.get("/api/stage/{stage}/comments/{thread_id}", response_model=StageCommentsResponse)
+async def get_stage_comments(stage: str, thread_id: str):
+    if stage not in STAGE_KEYS:
+        raise HTTPException(status_code=400, detail=error_detail("invalid_stage", "Invalid stage"))
+    comments = _load_stage_comments(thread_id, stage)
+    return StageCommentsResponse(comments=[StageCommentItem(**comment) for comment in comments])
+
+
+@app.post("/api/stage/{stage}/comments/{thread_id}", response_model=CreateStageCommentResponse)
+async def create_stage_comment_endpoint(stage: str, thread_id: str, request: CreateStageCommentRequest):
+    if stage not in STAGE_KEYS:
+        raise HTTPException(status_code=400, detail=error_detail("invalid_stage", "Invalid stage"))
+    body = request.body.strip()
+    if not body:
+        raise HTTPException(status_code=400, detail=error_detail("invalid_input", "Comment body cannot be empty."))
+    comment = _create_stage_comment(thread_id, stage, body)
+    _record_stage_event(thread_id, stage, "comment_added", body[:120])
+    return CreateStageCommentResponse(comment=StageCommentItem(**comment))
+
+
+@app.patch("/api/stage/comment/{comment_id}", response_model=CreateStageCommentResponse)
+async def update_stage_comment_endpoint(comment_id: int, request: UpdateStageCommentRequest):
+    status = request.status.strip().lower()
+    if status not in {"open", "resolved"}:
+        raise HTTPException(status_code=400, detail=error_detail("invalid_status", "Comment status must be 'open' or 'resolved'."))
+    comment = _update_stage_comment_status(comment_id, status)
+    if not comment:
+        raise HTTPException(status_code=404, detail=error_detail("not_found", "Comment not found."))
+    _record_stage_event(
+        comment["thread_id"],
+        comment["stage"],
+        "comment_resolved" if status == "resolved" else "comment_reopened",
+        comment["body"][:120],
+    )
+    return CreateStageCommentResponse(
+        comment=StageCommentItem(
+            id=comment["id"],
+            body=comment["body"],
+            status=comment["status"],
+            created_at=comment["created_at"],
+            resolved_at=comment["resolved_at"],
+        )
+    )
+
+
+@app.get("/api/stage/summaries/{thread_id}", response_model=StageSummariesResponse)
+async def get_stage_summaries(thread_id: str):
+    artifacts = get_project_artifacts(thread_id)
+
+    def build_summary(stage: str) -> StageSummaryItem:
+        latest_revision = _get_latest_stage_revision(thread_id, stage)
+        latest_timestamp = _get_latest_stage_timestamp(thread_id, stage)
+        dependency_timestamps = [
+            _get_latest_stage_timestamp(thread_id, dependency)
+            for dependency in STAGE_DEPENDENCIES[stage]
+        ]
+        dependency_timestamps = [ts for ts in dependency_timestamps if ts is not None]
+        stale = bool(
+            _stage_has_content(artifacts, stage)
+            and latest_timestamp is not None
+            and any(ts > latest_timestamp for ts in dependency_timestamps)
+        )
+        downstream_impacted = [
+            downstream
+            for downstream in STAGE_DOWNSTREAM[stage]
+            if _stage_has_content(artifacts, downstream)
+            and latest_timestamp is not None
+            and (
+                (_get_latest_stage_timestamp(thread_id, downstream) or 0) < latest_timestamp
+            )
+        ]
+        open_comments = sum(
+            1 for comment in _load_stage_comments(thread_id, stage) if comment["status"] == "open"
+        )
+        return StageSummaryItem(
+            stage=stage,
+            status=_get_stage_status(thread_id, stage),
+            has_content=_stage_has_content(artifacts, stage),
+            blocked_by=[
+                dependency for dependency in STAGE_DEPENDENCIES[stage]
+                if not _stage_has_content(artifacts, dependency)
+            ],
+            downstream_stages=STAGE_DOWNSTREAM[stage],
+            downstream_impacted=downstream_impacted,
+            stale=stale,
+            open_comments=open_comments,
+            last_updated_at=latest_timestamp,
+            last_revision_source=latest_revision["source"] if latest_revision else None,
+            last_revision_summary=latest_revision["summary"] if latest_revision else None,
+            last_revision_reviewed=latest_revision["reviewed"] if latest_revision else False,
+        )
+
+    return StageSummariesResponse(
+        prd=build_summary("prd"),
+        architecture=build_summary("architecture"),
+        stories=build_summary("stories"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1615,6 +2251,7 @@ async def export_project(thread_id: str, format: str = "markdown"):
 
 class ModelsCheckResponse(BaseModel):
     available: list[str]
+    budgets: dict[str, dict[str, int]]
 
 
 @app.get("/api/models/check", response_model=ModelsCheckResponse)
@@ -1631,8 +2268,16 @@ async def check_models():
         for adapter, is_available in zip(MODEL_ADAPTERS.values(), checks)
         if is_available
     ]
+    budgets = {
+        adapter.model_choice: {
+            "max_context_tokens": adapter.max_context_tokens,
+            "prompt_budget_tokens": adapter.prompt_budget_tokens,
+            "response_budget_tokens": adapter.response_budget_tokens,
+        }
+        for adapter in MODEL_ADAPTERS.values()
+    }
 
-    return ModelsCheckResponse(available=available)
+    return ModelsCheckResponse(available=available, budgets=budgets)
 
 
 @app.get("/health")

@@ -96,15 +96,83 @@ interface ApiErrorPayload {
   };
 }
 
+type ReviewSource = "manual_edit" | "ai_revision";
+type ReviewAction = "save_prd" | "save_architecture" | "save_stories";
+type StageStatus = "draft" | "approved" | "needs_revision";
+type StageCommentStatus = "open" | "resolved";
+
+interface ReviewDiffRow {
+  kind: "same" | "added" | "removed" | "changed";
+  leftLineNumber: number | null;
+  leftText: string;
+  rightLineNumber: number | null;
+  rightText: string;
+}
+
+interface PendingReview {
+  action: ReviewAction;
+  stage: WorkspaceStage;
+  stageLabel: string;
+  source: ReviewSource;
+  context: "manual_edit" | "ai_refine" | "stage_chat";
+  summary: string;
+  warning?: string;
+  instruction?: string;
+  currentContent: string;
+  proposedContent: string;
+  rows: ReviewDiffRow[];
+}
+
+interface StageEvent {
+  event_type: string;
+  detail: string;
+  created_at: number;
+}
+
+interface StageRevision {
+  id: number;
+  source: string;
+  summary: string;
+  instruction: string;
+  reviewed: boolean;
+  downstream_reset: WorkspaceStage[];
+  content_length: number;
+  created_at: number;
+}
+
+interface StageComment {
+  id: number;
+  body: string;
+  status: StageCommentStatus;
+  created_at: number;
+  resolved_at?: number | null;
+}
+
+interface StageSummary {
+  stage: WorkspaceStage;
+  status: StageStatus;
+  has_content: boolean;
+  blocked_by: WorkspaceStage[];
+  downstream_stages: WorkspaceStage[];
+  downstream_impacted: WorkspaceStage[];
+  stale: boolean;
+  open_comments: number;
+  last_updated_at?: number | null;
+  last_revision_source?: string | null;
+  last_revision_summary?: string | null;
+  last_revision_reviewed: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+const DEFAULT_API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
 const DEFAULT_JIRA_DOMAIN = process.env.NEXT_PUBLIC_DEFAULT_JIRA_DOMAIN ?? "";
-const API_BASE = DEFAULT_API_BASE;
+const API_BASE = DEFAULT_API_BASE.replace(/\/$/, "");
 const ACCEPTED_EXTENSIONS = ".xlsx,.xls,.docx,.pdf,.md";
-const PROJECTS_STORAGE_KEY = "ai-factory-projects";
+const LEGACY_PROJECTS_STORAGE_KEY = "ai-factory-projects";
+const ACTIVE_PROJECT_STORAGE_KEY = "ai-factory-active-project";
 
 const MODEL_OPTIONS: {
   value: ModelChoice;
@@ -152,19 +220,167 @@ function modelDot(m?: ModelChoice) {
 function categoryBadgeClass(category: string): string {
   return CATEGORY_COLORS[category] ?? "bg-zinc-800/80 text-zinc-300 border-zinc-600/60";
 }
-function loadProjects(): Project[] {
+function loadLegacyProjects(): Project[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    const raw = localStorage.getItem(LEGACY_PROJECTS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return parsed as Project[];
   } catch { /* ignore */ }
   return [];
 }
-function saveProjects(projects: Project[]) {
+function clearLegacyProjects() {
   if (typeof window === "undefined") return;
-  localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+  localStorage.removeItem(LEGACY_PROJECTS_STORAGE_KEY);
+}
+function loadActiveProjectId(): string | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+  return raw?.trim() || null;
+}
+function saveActiveProjectId(projectId: string | null) {
+  if (typeof window === "undefined") return;
+  if (!projectId) {
+    localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectId);
+}
+function loadProjectIdFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("project")?.trim() || null;
+}
+function syncProjectInCurrentUrl(projectId: string | null) {
+  if (typeof window === "undefined") return;
+  const params = new URLSearchParams(window.location.search);
+  if (projectId) params.set("project", projectId);
+  else params.delete("project");
+  const nextQuery = params.toString();
+  const nextUrl = nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname;
+  window.history.replaceState(window.history.state, "", nextUrl);
+}
+
+function buildLineDiffRows(currentContent: string, proposedContent: string): ReviewDiffRow[] {
+  const currentLines = currentContent.split("\n");
+  const proposedLines = proposedContent.split("\n");
+  const dp = Array.from({ length: currentLines.length + 1 }, () =>
+    Array<number>(proposedLines.length + 1).fill(0)
+  );
+
+  for (let i = currentLines.length - 1; i >= 0; i -= 1) {
+    for (let j = proposedLines.length - 1; j >= 0; j -= 1) {
+      dp[i][j] =
+        currentLines[i] === proposedLines[j]
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const ops: { type: "same" | "removed" | "added"; text: string }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < currentLines.length || j < proposedLines.length) {
+    if (i < currentLines.length && j < proposedLines.length && currentLines[i] === proposedLines[j]) {
+      ops.push({ type: "same", text: currentLines[i] });
+      i += 1;
+      j += 1;
+    } else if (j < proposedLines.length && (i === currentLines.length || dp[i][j + 1] >= dp[i + 1][j])) {
+      ops.push({ type: "added", text: proposedLines[j] });
+      j += 1;
+    } else if (i < currentLines.length) {
+      ops.push({ type: "removed", text: currentLines[i] });
+      i += 1;
+    }
+  }
+
+  const rows: ReviewDiffRow[] = [];
+  let currentLineNumber = 1;
+  let proposedLineNumber = 1;
+  let index = 0;
+
+  while (index < ops.length) {
+    const op = ops[index];
+    if (op.type === "same") {
+      rows.push({
+        kind: "same",
+        leftLineNumber: currentLineNumber,
+        leftText: op.text,
+        rightLineNumber: proposedLineNumber,
+        rightText: op.text,
+      });
+      currentLineNumber += 1;
+      proposedLineNumber += 1;
+      index += 1;
+      continue;
+    }
+
+    const removedBlock: string[] = [];
+    const addedBlock: string[] = [];
+    while (index < ops.length && ops[index].type !== "same") {
+      if (ops[index].type === "removed") removedBlock.push(ops[index].text);
+      if (ops[index].type === "added") addedBlock.push(ops[index].text);
+      index += 1;
+    }
+
+    const maxBlockLength = Math.max(removedBlock.length, addedBlock.length);
+    for (let blockIndex = 0; blockIndex < maxBlockLength; blockIndex += 1) {
+      const leftText = removedBlock[blockIndex] ?? "";
+      const rightText = addedBlock[blockIndex] ?? "";
+      rows.push({
+        kind:
+          leftText && rightText
+            ? "changed"
+            : leftText
+            ? "removed"
+            : "added",
+        leftLineNumber: leftText ? currentLineNumber : null,
+        leftText,
+        rightLineNumber: rightText ? proposedLineNumber : null,
+        rightText,
+      });
+      if (leftText) currentLineNumber += 1;
+      if (rightText) proposedLineNumber += 1;
+    }
+  }
+
+  return rows;
+}
+function apiUrl(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (!API_BASE) return normalizedPath;
+  if (API_BASE.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${API_BASE}${normalizedPath.slice(4)}`;
+  }
+  return `${API_BASE}${normalizedPath}`;
+}
+async function fetchProjectsFromApi(): Promise<Project[]> {
+  const res = await fetch(apiUrl("/api/projects"));
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const data = await res.json() as { projects?: Project[] };
+  return Array.isArray(data.projects) ? data.projects : [];
+}
+
+async function createProjectInApi(name: string, threadId?: string): Promise<Project> {
+  const res = await fetch(apiUrl("/api/projects"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, thread_id: threadId }),
+  });
+  if (!res.ok) {
+    await throwApiError(res);
+  }
+  const data = await res.json() as { project: Project };
+  return data.project;
+}
+
+async function deleteProjectInApi(projectId: string): Promise<void> {
+  const res = await fetch(apiUrl(`/api/projects/${projectId}`), { method: "DELETE" });
+  if (!res.ok) {
+    await throwApiError(res);
+  }
 }
 function formatApiErrorMessage(payload: ApiErrorPayload, status: number): string {
   if (typeof payload.detail === "string" && payload.detail.trim()) {
@@ -373,6 +589,398 @@ function StageChatPanel({
             </svg>
           )}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewDiffModal({
+  pendingReview,
+  isApplying,
+  onClose,
+  onApply,
+}: {
+  pendingReview: PendingReview | null;
+  isApplying: boolean;
+  onClose: () => void;
+  onApply: () => void;
+}) {
+  if (!pendingReview) return null;
+
+  const changedCount = pendingReview.rows.filter((row) => row.kind === "changed").length;
+  const addedCount = pendingReview.rows.filter((row) => row.kind === "added").length;
+  const removedCount = pendingReview.rows.filter((row) => row.kind === "removed").length;
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm">
+      <div className="flex max-h-[90vh] w-full max-w-7xl flex-col overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/50">
+        <div className="flex items-start justify-between gap-4 border-b border-zinc-800 px-6 py-5">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-400">
+              Review Changes
+            </p>
+            <h3 className="mt-1 text-lg font-semibold text-zinc-100">
+              {pendingReview.stageLabel} {pendingReview.source === "ai_revision" ? "AI Revision" : "Manual Edit"}
+            </h3>
+            <p className="mt-2 text-sm text-zinc-400">{pendingReview.summary}</p>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <span className="rounded-full border border-amber-700/40 bg-amber-950/40 px-2.5 py-1 text-amber-300">
+                {changedCount} changed
+              </span>
+              <span className="rounded-full border border-emerald-700/40 bg-emerald-950/40 px-2.5 py-1 text-emerald-300">
+                {addedCount} added
+              </span>
+              <span className="rounded-full border border-red-700/40 bg-red-950/40 px-2.5 py-1 text-red-300">
+                {removedCount} removed
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isApplying}
+            className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-400 transition-colors hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Close
+          </button>
+        </div>
+
+        {pendingReview.warning && (
+          <div className="border-b border-zinc-800 bg-amber-950/30 px-6 py-3 text-sm text-amber-300">
+            {pendingReview.warning}
+          </div>
+        )}
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-zinc-800 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+          <div className="min-h-0 overflow-hidden">
+            <div className="border-b border-zinc-800 px-4 py-3">
+              <h4 className="text-sm font-semibold text-zinc-200">Current</h4>
+            </div>
+            <div className="max-h-[56vh] overflow-auto">
+              {pendingReview.rows.map((row, index) => (
+                <div
+                  key={`left-${index}`}
+                  className={`grid grid-cols-[56px_1fr] gap-0 border-b border-zinc-900/80 font-mono text-xs ${
+                    row.kind === "removed" || row.kind === "changed"
+                      ? "bg-red-950/20"
+                      : "bg-zinc-950/30"
+                  }`}
+                >
+                  <div className="border-r border-zinc-800 px-3 py-2 text-right text-zinc-600">
+                    {row.leftLineNumber ?? ""}
+                  </div>
+                  <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 text-zinc-300">
+                    {row.leftText || " "}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="min-h-0 overflow-hidden">
+            <div className="border-b border-zinc-800 px-4 py-3">
+              <h4 className="text-sm font-semibold text-zinc-200">Proposed</h4>
+            </div>
+            <div className="max-h-[56vh] overflow-auto">
+              {pendingReview.rows.map((row, index) => (
+                <div
+                  key={`right-${index}`}
+                  className={`grid grid-cols-[56px_1fr] gap-0 border-b border-zinc-900/80 font-mono text-xs ${
+                    row.kind === "added" || row.kind === "changed"
+                      ? "bg-emerald-950/20"
+                      : "bg-zinc-950/30"
+                  }`}
+                >
+                  <div className="border-r border-zinc-800 px-3 py-2 text-right text-zinc-600">
+                    {row.rightLineNumber ?? ""}
+                  </div>
+                  <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 text-zinc-300">
+                    {row.rightText || " "}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-zinc-800 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isApplying}
+            className="rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-300 transition-colors hover:border-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Back to Edit
+          </button>
+          <button
+            type="button"
+            onClick={onApply}
+            disabled={isApplying}
+            className="rounded-xl bg-gradient-to-r from-amber-600 to-orange-500 px-5 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:from-zinc-700 disabled:to-zinc-700"
+          >
+            {isApplying ? "Applying…" : "Apply Changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function stageLabel(stage: WorkspaceStage): string {
+  return stage === "prd" ? "PRD" : stage === "architecture" ? "Architecture" : "User Stories";
+}
+
+function formatRevisionSource(source?: string | null): string {
+  const map: Record<string, string> = {
+    generated: "Generated",
+    manual_edit: "Manual edit",
+    ai_revision: "AI revision",
+    stage_chat: "Stage discussion",
+    ai_refine: "AI refine",
+  };
+  return source ? (map[source] ?? source) : "No revisions yet";
+}
+
+function StageSummaryPanel({
+  currentStage,
+  summaries,
+  onJump,
+}: {
+  currentStage: WorkspaceStage;
+  summaries: Record<WorkspaceStage, StageSummary>;
+  onJump: (stage: WorkspaceStage) => void;
+}) {
+  const current = summaries[currentStage];
+  const upstream = current.blocked_by;
+  const downstream = current.downstream_stages;
+  const impacted = current.downstream_impacted;
+
+  return (
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Stage Flow</p>
+          <h3 className="mt-1 text-sm font-semibold text-zinc-100">{stageLabel(currentStage)} summary</h3>
+          <p className="mt-1 text-xs text-zinc-500">
+            {current.last_revision_summary || "No formal revision record yet."}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-zinc-300">
+            Status: {current.status.replace("_", " ")}
+          </span>
+          <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-zinc-300">
+            {current.open_comments} open note{current.open_comments === 1 ? "" : "s"}
+          </span>
+          {current.stale && (
+            <span className="rounded-full border border-amber-700/50 bg-amber-950/40 px-2.5 py-1 text-amber-300">
+              Needs downstream refresh
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        {(Object.keys(summaries) as WorkspaceStage[]).map((stage) => {
+          const summary = summaries[stage];
+          return (
+            <button
+              key={stage}
+              type="button"
+              onClick={() => onJump(stage)}
+              className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                stage === currentStage
+                  ? "border-zinc-600 bg-zinc-800/90"
+                  : "border-zinc-800 bg-zinc-950/30 hover:border-zinc-700 hover:bg-zinc-900/70"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-zinc-100">{stageLabel(stage)}</span>
+                <span className={`h-2.5 w-2.5 rounded-full ${summary.has_content ? "bg-emerald-400" : "bg-zinc-700"}`} />
+              </div>
+              <p className="mt-2 text-xs text-zinc-500">{summary.last_revision_summary || "No revisions yet"}</p>
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                <span>{formatRevisionSource(summary.last_revision_source)}</span>
+                {summary.last_updated_at ? (
+                  <span>{new Date(summary.last_updated_at * 1000).toLocaleString()}</span>
+                ) : null}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Depends On</p>
+          {upstream.length === 0 ? (
+            <p className="mt-2 text-sm text-zinc-300">No upstream stage. This is the source of truth.</p>
+          ) : (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {upstream.map((stage) => (
+                <span key={stage} className="rounded-full border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-xs text-zinc-300">
+                  {stageLabel(stage)}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Affects</p>
+          {downstream.length === 0 ? (
+            <p className="mt-2 text-sm text-zinc-300">No downstream stage.</p>
+          ) : (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {downstream.map((stage) => (
+                <span key={stage} className="rounded-full border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-xs text-zinc-300">
+                  {stageLabel(stage)}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Review State</p>
+          <p className="mt-2 text-sm text-zinc-300">
+            {current.last_revision_reviewed ? "Latest revision was reviewed before apply." : "Latest revision was not review-applied."}
+          </p>
+          {impacted.length > 0 ? (
+            <p className="mt-2 text-xs text-amber-300">
+              Downstream impact: {impacted.map((stage) => stageLabel(stage)).join(", ")}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StageReviewNotesPanel({
+  stage,
+  comments,
+  draft,
+  isSubmitting,
+  onDraftChange,
+  onSubmit,
+  onToggleStatus,
+}: {
+  stage: WorkspaceStage;
+  comments: StageComment[];
+  draft: string;
+  isSubmitting: boolean;
+  onDraftChange: (value: string) => void;
+  onSubmit: () => void;
+  onToggleStatus: (comment: StageComment) => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+      <div className="border-b border-zinc-800 px-5 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-semibold text-zinc-100">Review Notes</h4>
+            <p className="mt-1 text-xs text-zinc-500">
+              Leave structured notes for {stageLabel(stage)} without editing the artifact immediately.
+            </p>
+          </div>
+          <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] text-zinc-400">
+            {comments.filter((comment) => comment.status === "open").length} open
+          </span>
+        </div>
+      </div>
+      <div className="space-y-3 px-5 py-4">
+        <textarea
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          rows={3}
+          placeholder={`Leave a review note for ${stageLabel(stage)}…`}
+          className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+        />
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={isSubmitting || !draft.trim()}
+            className="rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 transition-colors disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+          >
+            {isSubmitting ? "Saving…" : "Add Review Note"}
+          </button>
+        </div>
+      </div>
+      <div className="border-t border-zinc-800 divide-y divide-zinc-800/70">
+        {comments.length === 0 ? (
+          <p className="px-5 py-4 text-xs text-zinc-600">No review notes yet.</p>
+        ) : comments.map((comment) => (
+          <div key={comment.id} className="px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                  <span className={`rounded-full border px-2 py-0.5 ${
+                    comment.status === "open"
+                      ? "border-amber-700/50 bg-amber-950/40 text-amber-300"
+                      : "border-emerald-700/50 bg-emerald-950/40 text-emerald-300"
+                  }`}>
+                    {comment.status === "open" ? "Open" : "Resolved"}
+                  </span>
+                  <span>{new Date(comment.created_at * 1000).toLocaleString()}</span>
+                </div>
+                <p className="mt-2 whitespace-pre-wrap text-sm text-zinc-300">{comment.body}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onToggleStatus(comment)}
+                className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-zinc-600"
+              >
+                {comment.status === "open" ? "Resolve" : "Reopen"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StageRevisionLog({
+  revisions,
+}: {
+  revisions: StageRevision[];
+}) {
+  return (
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+      <div className="border-b border-zinc-800 px-5 py-3">
+        <h4 className="text-sm font-semibold text-zinc-100">Revision Log</h4>
+        <p className="mt-1 text-xs text-zinc-500">Latest applied revisions, including source, review state, and downstream impact.</p>
+      </div>
+      <div className="divide-y divide-zinc-800/70">
+        {revisions.length === 0 ? (
+          <p className="px-5 py-4 text-xs text-zinc-600">No revisions recorded yet.</p>
+        ) : revisions.map((revision) => (
+          <div key={revision.id} className="px-5 py-4">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+              <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-zinc-300">
+                {formatRevisionSource(revision.source)}
+              </span>
+              <span className={`rounded-full border px-2 py-0.5 ${
+                revision.reviewed
+                  ? "border-emerald-700/50 bg-emerald-950/40 text-emerald-300"
+                  : "border-zinc-700 bg-zinc-900 text-zinc-400"
+              }`}>
+                {revision.reviewed ? "Reviewed" : "Direct apply"}
+              </span>
+              <span>{new Date(revision.created_at * 1000).toLocaleString()}</span>
+            </div>
+            <p className="mt-2 text-sm text-zinc-200">{revision.summary || "No summary recorded."}</p>
+            {revision.instruction ? (
+              <p className="mt-2 text-xs text-zinc-500">Instruction: {revision.instruction}</p>
+            ) : null}
+            <div className="mt-2 flex flex-wrap gap-3 text-xs text-zinc-500">
+              <span>Content size: {revision.content_length.toLocaleString()} chars</span>
+              {revision.downstream_reset.length > 0 ? (
+                <span>Invalidated: {revision.downstream_reset.map((stage) => stageLabel(stage)).join(", ")}</span>
+              ) : null}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -651,7 +1259,6 @@ export default function HomePage() {
   const [isLoadingGithubRepos, setIsLoadingGithubRepos] = useState(false);
   const [githubReposFetchFailed, setGithubReposFetchFailed] = useState(false);
   // ── Stage status ─────────────────────────────────────────────────────────
-  type StageStatus = "draft" | "approved" | "needs_revision";
   const [prdStatus, setPrdStatus]         = useState<StageStatus>("draft");
   const [archStatus, setArchStatus]       = useState<StageStatus>("draft");
   const [storiesStatus, setStoriesStatus] = useState<StageStatus>("draft");
@@ -659,9 +1266,60 @@ export default function HomePage() {
   const [showPrdHistory, setShowPrdHistory]         = useState(false);
   const [showArchHistory, setShowArchHistory]       = useState(false);
   const [showStoriesHistory, setShowStoriesHistory] = useState(false);
-  const [prdEvents, setPrdEvents]                   = useState<{ event_type: string; detail: string; created_at: number }[]>([]);
-  const [archEvents, setArchEvents]                 = useState<{ event_type: string; detail: string; created_at: number }[]>([]);
-  const [storiesEvents, setStoriesEvents]           = useState<{ event_type: string; detail: string; created_at: number }[]>([]);
+  const [prdEvents, setPrdEvents]                   = useState<StageEvent[]>([]);
+  const [archEvents, setArchEvents]                 = useState<StageEvent[]>([]);
+  const [storiesEvents, setStoriesEvents]           = useState<StageEvent[]>([]);
+  const [stageSummaries, setStageSummaries] = useState<Record<WorkspaceStage, StageSummary>>({
+    prd: {
+      stage: "prd",
+      status: "draft",
+      has_content: false,
+      blocked_by: [],
+      downstream_stages: ["architecture", "stories"],
+      downstream_impacted: [],
+      stale: false,
+      open_comments: 0,
+      last_revision_reviewed: false,
+    },
+    architecture: {
+      stage: "architecture",
+      status: "draft",
+      has_content: false,
+      blocked_by: ["prd"],
+      downstream_stages: ["stories"],
+      downstream_impacted: [],
+      stale: false,
+      open_comments: 0,
+      last_revision_reviewed: false,
+    },
+    stories: {
+      stage: "stories",
+      status: "draft",
+      has_content: false,
+      blocked_by: ["architecture"],
+      downstream_stages: [],
+      downstream_impacted: [],
+      stale: false,
+      open_comments: 0,
+      last_revision_reviewed: false,
+    },
+  });
+  const [stageRevisions, setStageRevisions] = useState<Record<WorkspaceStage, StageRevision[]>>({
+    prd: [],
+    architecture: [],
+    stories: [],
+  });
+  const [stageComments, setStageComments] = useState<Record<WorkspaceStage, StageComment[]>>({
+    prd: [],
+    architecture: [],
+    stories: [],
+  });
+  const [commentDrafts, setCommentDrafts] = useState<Record<WorkspaceStage, string>>({
+    prd: "",
+    architecture: "",
+    stories: "",
+  });
+  const [submittingCommentStage, setSubmittingCommentStage] = useState<WorkspaceStage | null>(null);
 
   // delivery modal step: "configure" → pick target/project, "preview" → review items
   const [deliveryStep, setDeliveryStep]           = useState<"configure" | "preview">("configure");
@@ -669,6 +1327,8 @@ export default function HomePage() {
   // editable labels per item index: Map<itemIndex, string[]>
   const [editableLabels, setEditableLabels] = useState<Map<number, string[]>>(new Map());
   const [isLoadingPreview, setIsLoadingPreview]   = useState(false);
+  const [pendingReview, setPendingReview]         = useState<PendingReview | null>(null);
+  const [isApplyingReview, setIsApplyingReview]   = useState(false);
 
   // ── Amendment Mode banner ─────────────────────────────────────────────────
   const [amendmentBannerDismissed, setAmendmentBannerDismissed] = useState(false);
@@ -680,6 +1340,7 @@ export default function HomePage() {
   // ── Model availability state ─────────────────────────────────────────────
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [checkingModels, setCheckingModels]   = useState(true);
+  const [modelCheckError, setModelCheckError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef    = useRef<HTMLTextAreaElement>(null);
@@ -688,7 +1349,8 @@ export default function HomePage() {
   // ── Check model availability on mount ───────────────────────────────────
   useEffect(() => {
     setCheckingModels(true);
-    fetch(`${API_BASE}/api/models/check`)
+    setModelCheckError(null);
+    fetch(apiUrl("/api/models/check"))
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<{ available: string[] }>;
@@ -702,20 +1364,57 @@ export default function HomePage() {
           if (firstAvail) setModelChoice(firstAvail.value);
         }
       })
-      .catch(() => {
-        // Backend unreachable — default to ollama so the user can still try
-        setAvailableModels(["ollama"]);
+      .catch((err: unknown) => {
+        setAvailableModels([]);
+        setModelCheckError(
+          err instanceof Error
+            ? `Model availability check failed via ${apiUrl("/api/models/check")}: ${err.message}`
+            : `Model availability check failed via ${apiUrl("/api/models/check")}`
+        );
       })
       .finally(() => setCheckingModels(false));
   }, []);
 
   // ── Load projects + integration config on mount ──────────────────────────
   useEffect(() => {
-    const stored = loadProjects();
-    setProjects(stored);
-    if (stored.length > 0) {
-      setActiveThreadId(stored[0].id);
-    }
+    const storedActiveProjectId = loadActiveProjectId();
+    const projectFromQuery = loadProjectIdFromUrl();
+
+    const loadInitialProjects = async () => {
+      try {
+        let remoteProjects = await fetchProjectsFromApi();
+        if (remoteProjects.length === 0) {
+          const legacyProjects = loadLegacyProjects();
+          if (legacyProjects.length > 0) {
+            for (const project of legacyProjects) {
+              await createProjectInApi(project.name, project.id);
+            }
+            clearLegacyProjects();
+            remoteProjects = await fetchProjectsFromApi();
+          }
+        }
+
+        setProjects(remoteProjects);
+        if (remoteProjects.length > 0) {
+          const activeProject =
+            remoteProjects.find((project) => project.id === projectFromQuery)
+            ?? remoteProjects.find((project) => project.id === storedActiveProjectId)
+            ?? remoteProjects[0];
+          setActiveThreadId(activeProject.id);
+          saveActiveProjectId(activeProject.id);
+          syncProjectInCurrentUrl(activeProject.id);
+        } else {
+          saveActiveProjectId(null);
+          syncProjectInCurrentUrl(null);
+        }
+      } catch {
+        setProjects([]);
+        saveActiveProjectId(null);
+        syncProjectInCurrentUrl(null);
+      }
+    };
+
+    loadInitialProjects();
     setJiraConfig(loadJiraConfig());
     setGitHubConfig(loadGitHubConfig());
     loadJiraToken().then(setJiraToken);
@@ -740,10 +1439,14 @@ export default function HomePage() {
       setArchChatInput("");
       setStoriesChatMessages([]);
       setStoriesChatInput("");
+      setPendingReview(null);
       setAmendmentBannerDismissed(false);
       setPrdStatus("draft");
       setArchStatus("draft");
       setStoriesStatus("draft");
+      setStageRevisions({ prd: [], architecture: [], stories: [] });
+      setStageComments({ prd: [], architecture: [], stories: [] });
+      setCommentDrafts({ prd: "", architecture: "", stories: "" });
       return;
     }
 
@@ -765,24 +1468,27 @@ export default function HomePage() {
     setArchChatInput("");
     setStoriesChatMessages([]);
     setStoriesChatInput("");
+    setPendingReview(null);
     setError(null);
 
     const tid = activeThreadId;
 
     // Load main thread state + stage chat histories + stage statuses in parallel
     Promise.all([
-      fetch(`${API_BASE}/api/chat/${tid}`, { signal: controller.signal }).then((r) => {
+      fetch(apiUrl(`/api/chat/${tid}`), { signal: controller.signal }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<ThreadStateResponse>;
       }),
-      fetch(`${API_BASE}/api/stage/architecture/chat/${tid}`, { signal: controller.signal })
+      fetch(apiUrl(`/api/stage/architecture/chat/${tid}`), { signal: controller.signal })
         .then((r) => r.ok ? r.json() : { messages: [] }),
-      fetch(`${API_BASE}/api/stage/stories/chat/${tid}`, { signal: controller.signal })
+      fetch(apiUrl(`/api/stage/stories/chat/${tid}`), { signal: controller.signal })
         .then((r) => r.ok ? r.json() : { messages: [] }),
-      fetch(`${API_BASE}/api/stage/statuses/${tid}`, { signal: controller.signal })
+      fetch(apiUrl(`/api/stage/statuses/${tid}`), { signal: controller.signal })
         .then((r) => r.ok ? r.json() : { prd: "draft", architecture: "draft", stories: "draft" }),
+      fetch(apiUrl(`/api/stage/summaries/${tid}`), { signal: controller.signal })
+        .then((r) => r.ok ? r.json() : null),
     ])
-      .then(([data, archHistory, storiesHistory, statuses]) => {
+      .then(([data, archHistory, storiesHistory, statuses, summaries]) => {
         setMessages(
           data.messages.map((m) => ({
             role: m.role as "user" | "assistant",
@@ -798,6 +1504,13 @@ export default function HomePage() {
         setPrdStatus((statuses.prd ?? "draft") as StageStatus);
         setArchStatus((statuses.architecture ?? "draft") as StageStatus);
         setStoriesStatus((statuses.stories ?? "draft") as StageStatus);
+        if (summaries?.prd && summaries?.architecture && summaries?.stories) {
+          setStageSummaries({
+            prd: summaries.prd as StageSummary,
+            architecture: summaries.architecture as StageSummary,
+            stories: summaries.stories as StageSummary,
+          });
+        }
         if (data.user_stories_draft) {
           setActiveWorkspaceStage("stories");
         } else if (data.architecture_draft) {
@@ -805,6 +1518,7 @@ export default function HomePage() {
         } else {
           setActiveWorkspaceStage("prd");
         }
+        void refreshStageGovernance(tid);
       })
       .catch(() => {
         setMessages([]);
@@ -814,6 +1528,8 @@ export default function HomePage() {
         setUserStoriesDraft("");
         setArchChatMessages([]);
         setStoriesChatMessages([]);
+        setStageRevisions({ prd: [], architecture: [], stories: [] });
+        setStageComments({ prd: [], architecture: [], stories: [] });
       })
       .finally(() => {
         clearTimeout(timeoutId);
@@ -841,24 +1557,32 @@ export default function HomePage() {
   }, [userInput]);
 
   // ── Project management ──────────────────────────────────────────────────
-  const createProject = () => {
+  const createProject = async () => {
     const name = window.prompt("Project name:")?.trim();
     if (!name) return;
-    const newProject: Project = { id: Date.now().toString(), name };
-    const updated = [...projects, newProject];
-    setProjects(updated);
-    saveProjects(updated);
-    setActiveThreadId(newProject.id);
+    try {
+      const newProject = await createProjectInApi(name);
+      const updated = [...projects, newProject];
+      setProjects(updated);
+      setActiveThreadId(newProject.id);
+      saveActiveProjectId(newProject.id);
+      syncProjectInCurrentUrl(newProject.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create project");
+    }
   };
 
   const selectProject = (id: string) => {
     setActiveThreadId(id);
+    saveActiveProjectId(id);
+    syncProjectInCurrentUrl(id);
     setUserInput("");
     setAttachedFiles([]);
     setError(null);
     setUploadError(null);
     setDeliveryPushResult(null);
     setDeliveryErrorMsg(null);
+    setPendingReview(null);
     setActiveWorkspaceStage("prd");
     setAmendmentBannerDismissed(false);
   };
@@ -867,23 +1591,27 @@ export default function HomePage() {
     e.stopPropagation();
     setDeletingId(projectId);
     try {
-      await fetch(`${API_BASE}/api/chat/${projectId}`, { method: "DELETE" });
+      await deleteProjectInApi(projectId);
     } catch {
-      // Ignore network errors — remove locally regardless
+      setDeletingId(null);
+      setError("Failed to delete project");
+      return;
     } finally {
       setDeletingId(null);
     }
     const updated = projects.filter((p) => p.id !== projectId);
     setProjects(updated);
-    saveProjects(updated);
     if (activeThreadId === projectId) {
       const next = updated[0] ?? null;
       setActiveThreadId(next ? next.id : null);
+      saveActiveProjectId(next ? next.id : null);
+      syncProjectInCurrentUrl(next ? next.id : null);
       setMessages([]);
       setPrdDraft("");
       setIsReady(false);
       setArchitectureDraft("");
       setUserStoriesDraft("");
+      setPendingReview(null);
       setActiveWorkspaceStage("prd");
       setError(null);
     }
@@ -899,7 +1627,7 @@ export default function HomePage() {
 
     setIsResettingPrd(true);
     try {
-      await fetch(`${API_BASE}/api/reset_prd/${activeThreadId}`, { method: "POST" });
+      await fetch(apiUrl(`/api/reset_prd/${activeThreadId}`), { method: "POST" });
     } catch {
       // Ignore network errors — update local state regardless
     } finally {
@@ -914,6 +1642,7 @@ export default function HomePage() {
     setIsEditingArch(false);
     setIsEditingStories(false);
     setActiveWorkspaceStage("prd");
+    resetStatusesForStage("prd");
     setMessages((prev) => [
       ...prev,
       {
@@ -921,6 +1650,7 @@ export default function HomePage() {
         content: "PRD has been reset. Please continue refining your requirements.",
       },
     ]);
+    await refreshStageGovernance(activeThreadId);
   };
 
   // ── Export project ───────────────────────────────────────────────────────
@@ -928,7 +1658,7 @@ export default function HomePage() {
     if (!activeThreadId) return;
     setIsExporting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/export/${activeThreadId}`);
+      const res = await fetch(apiUrl(`/api/export/${activeThreadId}`));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -944,31 +1674,114 @@ export default function HomePage() {
     }
   };
 
-  const handleSavePrd = async () => {
-    if (!activeThreadId || !editingPrdContent.trim()) return;
-    setIsSavingPrd(true);
+  const openReview = (review: Omit<PendingReview, "rows">) => {
+    setPendingReview({
+      ...review,
+      rows: buildLineDiffRows(review.currentContent, review.proposedContent),
+    });
+  };
+
+  const resetStatusesForStage = (stage: WorkspaceStage) => {
+    if (stage === "prd") {
+      setPrdStatus("draft");
+      setArchStatus("draft");
+      setStoriesStatus("draft");
+      return;
+    }
+    if (stage === "architecture") {
+      setArchStatus("draft");
+      setStoriesStatus("draft");
+      return;
+    }
+    setStoriesStatus("draft");
+  };
+
+  const applyReviewedChange = async () => {
+    if (!activeThreadId || !pendingReview) return;
+    setIsApplyingReview(true);
+    setError(null);
+
+    const body = JSON.stringify({
+      content: pendingReview.proposedContent,
+      change_source: pendingReview.source,
+      reviewed: true,
+      instruction: pendingReview.instruction ?? "",
+      change_context: pendingReview.context,
+    });
+
     try {
-      const res = await fetch(`${API_BASE}/api/prd/${activeThreadId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editingPrdContent }),
-      });
-      if (!res.ok) {
-        await throwApiError(res);
+      if (pendingReview.action === "save_prd") {
+        const res = await fetch(apiUrl(`/api/prd/${activeThreadId}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (!res.ok) await throwApiError(res);
+        const data = await res.json();
+        setPrdDraft(data.prd_draft);
+        setIsReady(data.is_ready);
+        setArchitectureDraft("");
+        setUserStoriesDraft("");
+        setIsEditingPrd(false);
+        if (pendingReview.source === "ai_revision") {
+          setPrdInstruction("");
+        }
+        setActiveWorkspaceStage("prd");
+        resetStatusesForStage("prd");
+      } else if (pendingReview.action === "save_architecture") {
+        const res = await fetch(apiUrl(`/api/architecture/${activeThreadId}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (!res.ok) await throwApiError(res);
+        const data = await res.json();
+        setArchitectureDraft(data.architecture_draft);
+        setUserStoriesDraft("");
+        setIsEditingArch(false);
+        setActiveWorkspaceStage("architecture");
+        resetStatusesForStage("architecture");
+      } else {
+        const res = await fetch(apiUrl(`/api/user_stories/${activeThreadId}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (!res.ok) await throwApiError(res);
+        const data = await res.json();
+        setUserStoriesDraft(data.user_stories_draft);
+        setIsEditingStories(false);
+        setActiveWorkspaceStage("stories");
+        resetStatusesForStage("stories");
       }
-      const data = await res.json();
-      setPrdDraft(data.prd_draft);
-      setIsReady(data.is_ready);
-      setArchitectureDraft("");
-      setUserStoriesDraft("");
-      setIsEditingPrd(false);
-      setActiveWorkspaceStage("prd");
+
+      await refreshStageGovernance(activeThreadId);
+      setPendingReview(null);
     } catch (e) {
       console.error(e);
-      setError(e instanceof Error ? e.message : "Failed to save PRD");
+      setError(e instanceof Error ? e.message : "Failed to apply reviewed changes");
     } finally {
-      setIsSavingPrd(false);
+      setIsApplyingReview(false);
     }
+  };
+
+  const handleSavePrd = async () => {
+    if (!activeThreadId || !editingPrdContent.trim()) return;
+    if (editingPrdContent === prdDraft) {
+      setIsEditingPrd(false);
+      return;
+    }
+    openReview({
+      action: "save_prd",
+      stage: "prd",
+      stageLabel: "PRD",
+      source: "manual_edit",
+      context: "manual_edit",
+      summary: "Review the PRD changes before they replace the current version.",
+      warning: "Applying this PRD update will clear Architecture and User Stories because they depend on this stage.",
+      currentContent: prdDraft,
+      proposedContent: editingPrdContent,
+    });
   };
 
   const handleRefinePrd = async () => {
@@ -976,25 +1789,32 @@ export default function HomePage() {
     setIsRefiningPrd(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/refine_prd`, {
+      const res = await fetch(apiUrl("/api/refine_prd"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           thread_id: activeThreadId,
           model_choice: modelChoice,
           instruction: prdInstruction,
+          preview_only: true,
         }),
       });
       if (!res.ok) {
         await throwApiError(res);
       }
       const data = await res.json();
-      setPrdDraft(data.prd_draft);
-      setIsReady(data.is_ready);
-      setArchitectureDraft("");
-      setUserStoriesDraft("");
-      setPrdInstruction("");
-      setActiveWorkspaceStage("prd");
+      openReview({
+        action: "save_prd",
+        stage: "prd",
+        stageLabel: "PRD",
+        source: "ai_revision",
+        context: "ai_refine",
+        summary: "Review the AI-proposed PRD revision before it is applied.",
+        warning: "Applying this AI revision will clear Architecture and User Stories because they depend on this stage.",
+        instruction: prdInstruction,
+        currentContent: prdDraft,
+        proposedContent: data.prd_draft,
+      });
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : "Failed to refine PRD");
@@ -1009,7 +1829,7 @@ export default function HomePage() {
     setIsGeneratingArch(true);
     setIsEditingArch(false);
     try {
-      const res = await fetch(`${API_BASE}/api/generate_architecture`, {
+      const res = await fetch(apiUrl("/api/generate_architecture"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ thread_id: activeThreadId, model_choice: modelChoice }),
@@ -1018,6 +1838,8 @@ export default function HomePage() {
       const data = await res.json();
       setArchitectureDraft(data.architecture_draft);
       setActiveWorkspaceStage("architecture");
+      resetStatusesForStage("architecture");
+      await refreshStageGovernance(activeThreadId);
     } catch (e) {
       console.error(e);
     } finally {
@@ -1027,31 +1849,29 @@ export default function HomePage() {
 
   // ── Save edited Architecture ──────────────────────────────────────────────
   const handleSaveArchitecture = async () => {
-    if (!activeThreadId) return;
-    setIsSavingArch(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/architecture/${activeThreadId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editingArchContent }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      setArchitectureDraft(editingArchContent);
-      setUserStoriesDraft("");
+    if (!activeThreadId || !editingArchContent.trim()) return;
+    if (editingArchContent === architectureDraft) {
       setIsEditingArch(false);
-      setActiveWorkspaceStage("architecture");
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsSavingArch(false);
+      return;
     }
+    openReview({
+      action: "save_architecture",
+      stage: "architecture",
+      stageLabel: "Architecture",
+      source: "manual_edit",
+      context: "manual_edit",
+      summary: "Review architecture edits before they replace the current design draft.",
+      warning: "Applying this architecture update will clear User Stories because delivery planning depends on this stage.",
+      currentContent: architectureDraft,
+      proposedContent: editingArchContent,
+    });
   };
 
   // ── Stage status approve / reopen ────────────────────────────────────────
   const handleSetStageStatus = async (stage: "prd" | "architecture" | "stories", status: StageStatus) => {
     if (!activeThreadId) return;
     try {
-      await fetch(`${API_BASE}/api/stage/${stage}/status/${activeThreadId}`, {
+      await fetch(apiUrl(`/api/stage/${stage}/status/${activeThreadId}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
@@ -1059,13 +1879,57 @@ export default function HomePage() {
       if (stage === "prd") setPrdStatus(status);
       else if (stage === "architecture") setArchStatus(status);
       else setStoriesStatus(status);
+      await fetchStageSummaries(activeThreadId);
     } catch { /* ignore — UI still reflects optimistic update above */ }
+  };
+
+  const handleAddStageComment = async (stage: WorkspaceStage) => {
+    if (!activeThreadId || !commentDrafts[stage].trim()) return;
+    setSubmittingCommentStage(stage);
+    setError(null);
+    try {
+      const res = await fetch(apiUrl(`/api/stage/${stage}/comments/${activeThreadId}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: commentDrafts[stage] }),
+      });
+      if (!res.ok) await throwApiError(res);
+      setCommentDrafts((prev) => ({ ...prev, [stage]: "" }));
+      await Promise.all([
+        fetchStageComments(stage, activeThreadId),
+        fetchStageSummaries(activeThreadId),
+        fetchStageEvents(stage),
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add review note");
+    } finally {
+      setSubmittingCommentStage(null);
+    }
+  };
+
+  const handleToggleCommentStatus = async (stage: WorkspaceStage, comment: StageComment) => {
+    if (!activeThreadId) return;
+    try {
+      const res = await fetch(apiUrl(`/api/stage/comment/${comment.id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: comment.status === "open" ? "resolved" : "open" }),
+      });
+      if (!res.ok) await throwApiError(res);
+      await Promise.all([
+        fetchStageComments(stage, activeThreadId),
+        fetchStageSummaries(activeThreadId),
+        fetchStageEvents(stage),
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update review note");
+    }
   };
 
   const fetchStageEvents = async (stage: "prd" | "architecture" | "stories") => {
     if (!activeThreadId) return;
     try {
-      const res = await fetch(`${API_BASE}/api/stage/${stage}/events/${activeThreadId}`);
+      const res = await fetch(apiUrl(`/api/stage/${stage}/events/${activeThreadId}`));
       if (!res.ok) return;
       const data = await res.json();
       const events = data.events ?? [];
@@ -1073,6 +1937,53 @@ export default function HomePage() {
       else if (stage === "architecture") setArchEvents(events);
       else setStoriesEvents(events);
     } catch { /* ignore */ }
+  };
+
+  const fetchStageRevisions = async (stage: WorkspaceStage, threadId = activeThreadId) => {
+    if (!threadId) return;
+    try {
+      const res = await fetch(apiUrl(`/api/stage/${stage}/revisions/${threadId}`));
+      if (!res.ok) return;
+      const data = await res.json() as { revisions?: StageRevision[] };
+      setStageRevisions((prev) => ({ ...prev, [stage]: data.revisions ?? [] }));
+    } catch { /* ignore */ }
+  };
+
+  const fetchStageComments = async (stage: WorkspaceStage, threadId = activeThreadId) => {
+    if (!threadId) return;
+    try {
+      const res = await fetch(apiUrl(`/api/stage/${stage}/comments/${threadId}`));
+      if (!res.ok) return;
+      const data = await res.json() as { comments?: StageComment[] };
+      setStageComments((prev) => ({ ...prev, [stage]: data.comments ?? [] }));
+    } catch { /* ignore */ }
+  };
+
+  const fetchStageSummaries = async (threadId = activeThreadId) => {
+    if (!threadId) return;
+    try {
+      const res = await fetch(apiUrl(`/api/stage/summaries/${threadId}`));
+      if (!res.ok) return;
+      const data = await res.json() as Record<WorkspaceStage, StageSummary>;
+      setStageSummaries({
+        prd: data.prd,
+        architecture: data.architecture,
+        stories: data.stories,
+      });
+    } catch { /* ignore */ }
+  };
+
+  const refreshStageGovernance = async (threadId = activeThreadId) => {
+    if (!threadId) return;
+    await Promise.all([
+      fetchStageSummaries(threadId),
+      fetchStageRevisions("prd", threadId),
+      fetchStageRevisions("architecture", threadId),
+      fetchStageRevisions("stories", threadId),
+      fetchStageComments("prd", threadId),
+      fetchStageComments("architecture", threadId),
+      fetchStageComments("stories", threadId),
+    ]);
   };
 
   const formatEventType = (t: string) => {
@@ -1084,6 +1995,9 @@ export default function HomePage() {
       approved: "Approved",
       reopened: "Reopened",
       marked_needs_revision: "Marked for revision",
+      comment_added: "Review note added",
+      comment_resolved: "Review note resolved",
+      comment_reopened: "Review note reopened",
     };
     return map[t] ?? t;
   };
@@ -1104,20 +2018,45 @@ export default function HomePage() {
     setError(null);
 
     try {
-      const res = await fetch(`${API_BASE}/api/stage/${stage}/chat`, {
+      const res = await fetch(apiUrl(`/api/stage/${stage}/chat`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thread_id: activeThreadId, user_input: userMsg, model_choice: modelChoice }),
+        body: JSON.stringify({
+          thread_id: activeThreadId,
+          user_input: userMsg,
+          model_choice: modelChoice,
+          preview_only: true,
+        }),
       });
       if (!res.ok) await throwApiError(res);
       const data = await res.json();
       setMsgs((prev) => [...prev, { role: "assistant", content: data.ai_response }]);
       if (data.updated_content) {
         if (stage === "architecture") {
-          setArchitectureDraft(data.updated_content);
-          setUserStoriesDraft("");
+          openReview({
+            action: "save_architecture",
+            stage: "architecture",
+            stageLabel: "Architecture",
+            source: "ai_revision",
+            context: "stage_chat",
+            summary: "Review the AI-proposed architecture update before applying it.",
+            warning: "Applying this architecture update will clear User Stories because delivery planning depends on this stage.",
+            instruction: userMsg,
+            currentContent: architectureDraft,
+            proposedContent: data.updated_content,
+          });
         } else {
-          setUserStoriesDraft(data.updated_content);
+          openReview({
+            action: "save_stories",
+            stage: "stories",
+            stageLabel: "User Stories",
+            source: "ai_revision",
+            context: "stage_chat",
+            summary: "Review the AI-proposed user story update before applying it.",
+            instruction: userMsg,
+            currentContent: userStoriesDraft,
+            proposedContent: data.updated_content,
+          });
         }
       }
     } catch (e) {
@@ -1147,7 +2086,7 @@ export default function HomePage() {
     if (!activeThreadId) return;
     setIsGeneratingStories(true);
     try {
-      const res = await fetch(`${API_BASE}/api/generate_user_stories`, {
+      const res = await fetch(apiUrl("/api/generate_user_stories"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ thread_id: activeThreadId, model_choice: modelChoice }),
@@ -1156,6 +2095,8 @@ export default function HomePage() {
       const data = await res.json();
       setUserStoriesDraft(data.user_stories_draft);
       setActiveWorkspaceStage("stories");
+      resetStatusesForStage("stories");
+      await refreshStageGovernance(activeThreadId);
     } catch (e) {
       console.error(e);
     } finally {
@@ -1176,26 +2117,20 @@ export default function HomePage() {
 
   const handleSaveUserStories = async () => {
     if (!activeThreadId || !editingStoriesContent.trim()) return;
-    setIsSavingStories(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/user_stories/${activeThreadId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editingStoriesContent }),
-      });
-      if (!res.ok) {
-        await throwApiError(res);
-      }
-      const data = await res.json();
-      setUserStoriesDraft(data.user_stories_draft);
+    if (editingStoriesContent === userStoriesDraft) {
       setIsEditingStories(false);
-      setActiveWorkspaceStage("stories");
-    } catch (e) {
-      console.error(e);
-      setError(e instanceof Error ? e.message : "Failed to save user stories");
-    } finally {
-      setIsSavingStories(false);
+      return;
     }
+    openReview({
+      action: "save_stories",
+      stage: "stories",
+      stageLabel: "User Stories",
+      source: "manual_edit",
+      context: "manual_edit",
+      summary: "Review backlog changes before they replace the current user stories draft.",
+      currentContent: userStoriesDraft,
+      proposedContent: editingStoriesContent,
+    });
   };
 
   const openDeliveryModal = async (target: DeliveryTarget) => {
@@ -1230,7 +2165,7 @@ export default function HomePage() {
           email: freshJiraCfg.email,
           token: freshJiraToken,
         });
-        const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
+        const res = await fetch(`${apiUrl("/api/jira/projects")}?${params}`);
         if (res.ok) {
           const { projects: list } = await res.json();
           setJiraProjects(list);
@@ -1250,7 +2185,7 @@ export default function HomePage() {
       setIsLoadingGithubRepos(true);
       try {
         const params = new URLSearchParams({ token: freshGithubToken });
-        const res = await fetch(`${API_BASE}/api/github/repos?${params}`);
+        const res = await fetch(`${apiUrl("/api/github/repos")}?${params}`);
         if (res.ok) {
           const { repos: list } = await res.json();
           setGithubRepos(list);
@@ -1283,7 +2218,7 @@ export default function HomePage() {
         body.github_owner = selectedGithubRepo.split("/")[0] ?? "";
         body.github_repo  = selectedGithubRepo.split("/")[1] ?? "";
       }
-      const res = await fetch(`${API_BASE}/api/delivery/preview`, {
+      const res = await fetch(apiUrl("/api/delivery/preview"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1313,7 +2248,7 @@ export default function HomePage() {
     setDeliveryPushResult(null);
 
     try {
-      const res = await fetch(`${API_BASE}/api/delivery/publish`, {
+      const res = await fetch(apiUrl("/api/delivery/publish"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1360,7 +2295,7 @@ export default function HomePage() {
       setError(null);
 
       try {
-        const response = await fetch(`${API_BASE}/api/chat`, {
+        const response = await fetch(apiUrl("/api/chat"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1440,7 +2375,7 @@ export default function HomePage() {
       const formData = new FormData();
       formData.append("file", file);
       try {
-        const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: formData });
+        const res = await fetch(apiUrl("/api/upload"), { method: "POST", body: formData });
         if (!res.ok) {
           await throwApiError(res);
         }
@@ -1461,7 +2396,7 @@ export default function HomePage() {
     (userInput.trim().length > 0 || attachedFiles.length > 0);
 
   // Whether availability data is loaded and meaningful (backend was reachable)
-  const hasAvailabilityData = !checkingModels && availableModels.length > 0;
+  const hasAvailabilityData = !checkingModels && !modelCheckError && availableModels.length > 0;
   const isModelAvailable = (val: string) =>
     !hasAvailabilityData || availableModels.includes(val);
   const onlyOneAvailable = hasAvailabilityData && availableModels.length === 1;
@@ -1470,15 +2405,13 @@ export default function HomePage() {
   const chatMarkdownComponents = buildMarkdownComponents(handleFormSubmit);
 
   const activeProject = projects.find((p) => p.id === activeThreadId);
+  const settingsHref = activeThreadId
+    ? `/settings?project=${encodeURIComponent(activeThreadId)}`
+    : "/settings";
 
   // Whether the export button should be shown
   const canExport = !!activeThreadId && (!!prdDraft || !!architectureDraft || !!userStoriesDraft);
-  const activeStageTitle =
-    activeWorkspaceStage === "prd"
-      ? "PRD"
-      : activeWorkspaceStage === "architecture"
-      ? "Architecture"
-      : "User Stories";
+  const activeStageTitle = stageLabel(activeWorkspaceStage);
   const stageCards: {
     key: WorkspaceStage;
     title: string;
@@ -1489,21 +2422,27 @@ export default function HomePage() {
     {
       key: "prd",
       title: "PRD",
-      subtitle: isReady ? "Ready for downstream work" : prdDraft ? "Draft in progress" : "Waiting for requirements",
+      subtitle: stageSummaries.prd.open_comments > 0
+        ? `${stageSummaries.prd.open_comments} open review note${stageSummaries.prd.open_comments === 1 ? "" : "s"}`
+        : isReady ? "Ready for downstream work" : prdDraft ? "Draft in progress" : "Waiting for requirements",
       ready: !!prdDraft,
       accent: "from-amber-500 to-orange-500",
     },
     {
       key: "architecture",
       title: "Architecture",
-      subtitle: architectureDraft ? "Technical design ready" : isReady ? "Ready to generate" : "Blocked by PRD",
+      subtitle: stageSummaries.architecture.stale
+        ? "Needs refresh after upstream change"
+        : architectureDraft ? "Technical design ready" : isReady ? "Ready to generate" : "Blocked by PRD",
       ready: !!architectureDraft,
       accent: "from-indigo-500 to-violet-500",
     },
     {
       key: "stories",
       title: "User Stories",
-      subtitle: userStoriesDraft ? "Delivery planning ready" : architectureDraft ? "Ready to generate" : "Blocked by architecture",
+      subtitle: stageSummaries.stories.stale
+        ? "Needs refresh after upstream change"
+        : userStoriesDraft ? "Delivery planning ready" : architectureDraft ? "Ready to generate" : "Blocked by architecture",
       ready: !!userStoriesDraft,
       accent: "from-emerald-500 to-teal-500",
     },
@@ -1660,7 +2599,7 @@ export default function HomePage() {
                 {projects.length} project{projects.length !== 1 ? "s" : ""}
               </p>
               <Link
-                href="/settings"
+                href={settingsHref}
                 className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                 title="Integration settings"
               >
@@ -1675,7 +2614,7 @@ export default function HomePage() {
             </div>
           ) : (
             <Link
-              href="/settings"
+              href={settingsHref}
               title="Settings"
               className="w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
             >
@@ -1717,6 +2656,11 @@ export default function HomePage() {
                 <Spinner className="w-3 h-3 text-zinc-500" />
                 <span className="text-xs text-zinc-500">Checking…</span>
               </div>
+            ) : modelCheckError ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-950/40 border border-red-800/50 rounded-lg" title={modelCheckError}>
+                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-red-400" />
+                <span className="text-xs font-medium text-red-300">Backend unreachable</span>
+              </div>
             ) : onlyOneAvailable ? (
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg">
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${modelDot(modelChoice)}`} />
@@ -1752,6 +2696,12 @@ export default function HomePage() {
             )}
           </div>
         </div>
+
+        {modelCheckError && (
+          <div className="border-b border-red-900/40 bg-red-950/20 px-5 py-2.5 text-[11px] text-red-300">
+            {modelCheckError}
+          </div>
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
@@ -2037,6 +2987,12 @@ export default function HomePage() {
                 </button>
               ))}
             </div>
+
+            <StageSummaryPanel
+              currentStage={activeWorkspaceStage}
+              summaries={stageSummaries}
+              onJump={setActiveWorkspaceStage}
+            />
           </div>
         </div>
 
@@ -2110,14 +3066,14 @@ export default function HomePage() {
                       <h4 className="text-sm font-semibold text-zinc-100">AI Revision</h4>
                       <p className="mt-1 text-xs text-zinc-500">Ask AI to revise only the PRD. Example: add audit log requirements, remove offline mode, split admin roles.</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleRefinePrd}
-                      disabled={isRefiningPrd || !prdInstruction.trim()}
-                      className="rounded-lg bg-gradient-to-r from-amber-600 to-orange-500 px-4 py-2 text-xs font-semibold text-white transition-all disabled:cursor-not-allowed disabled:from-zinc-700 disabled:to-zinc-700"
-                    >
-                      {isRefiningPrd ? "Applying…" : "Apply PRD Revision"}
-                    </button>
+                      <button
+                        type="button"
+                        onClick={handleRefinePrd}
+                        disabled={isRefiningPrd || !prdInstruction.trim()}
+                        className="rounded-lg bg-gradient-to-r from-amber-600 to-orange-500 px-4 py-2 text-xs font-semibold text-white transition-all disabled:cursor-not-allowed disabled:from-zinc-700 disabled:to-zinc-700"
+                      >
+                      {isRefiningPrd ? "Preparing…" : "Preview PRD Revision"}
+                      </button>
                   </div>
                   <textarea
                     value={prdInstruction}
@@ -2152,10 +3108,10 @@ export default function HomePage() {
                       <button
                         type="button"
                         onClick={handleSavePrd}
-                        disabled={isSavingPrd || !editingPrdContent.trim()}
+                        disabled={!editingPrdContent.trim()}
                         className="rounded-lg bg-gradient-to-r from-amber-600 to-orange-500 px-5 py-2 text-sm font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
                       >
-                        {isSavingPrd ? "Saving…" : "Save PRD"}
+                        Review Changes
                       </button>
                     </div>
                   </div>
@@ -2172,6 +3128,18 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
+
+              <StageReviewNotesPanel
+                stage="prd"
+                comments={stageComments.prd}
+                draft={commentDrafts.prd}
+                isSubmitting={submittingCommentStage === "prd"}
+                onDraftChange={(value) => setCommentDrafts((prev) => ({ ...prev, prd: value }))}
+                onSubmit={() => handleAddStageComment("prd")}
+                onToggleStatus={(comment) => handleToggleCommentStatus("prd", comment)}
+              />
+
+              <StageRevisionLog revisions={stageRevisions.prd} />
 
               {/* Activity history */}
               {prdDraft && (
@@ -2191,9 +3159,12 @@ export default function HomePage() {
                       {prdEvents.length === 0 ? (
                         <p className="px-5 py-3 text-xs text-zinc-600">No activity recorded yet.</p>
                       ) : prdEvents.map((ev, i) => (
-                        <div key={i} className="flex items-center gap-3 px-5 py-2.5">
+                        <div key={i} className="flex items-start gap-3 px-5 py-2.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0" />
-                          <span className="flex-1 text-xs text-zinc-300">{formatEventType(ev.event_type)}</span>
+                          <div className="flex-1">
+                            <p className="text-xs text-zinc-300">{formatEventType(ev.event_type)}</p>
+                            {ev.detail ? <p className="mt-1 text-[11px] text-zinc-500">{ev.detail}</p> : null}
+                          </div>
                           <span className="text-[10px] text-zinc-600 shrink-0">{new Date(ev.created_at * 1000).toLocaleString()}</span>
                         </div>
                       ))}
@@ -2308,10 +3279,10 @@ export default function HomePage() {
                       <button
                         type="button"
                         onClick={handleSaveArchitecture}
-                        disabled={isSavingArch || !editingArchContent.trim()}
+                        disabled={!editingArchContent.trim()}
                         className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2 text-sm font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
                       >
-                        {isSavingArch ? "Saving…" : "Save Architecture"}
+                        Review Changes
                       </button>
                     </div>
                   </div>
@@ -2332,6 +3303,18 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
+
+              <StageReviewNotesPanel
+                stage="architecture"
+                comments={stageComments.architecture}
+                draft={commentDrafts.architecture}
+                isSubmitting={submittingCommentStage === "architecture"}
+                onDraftChange={(value) => setCommentDrafts((prev) => ({ ...prev, architecture: value }))}
+                onSubmit={() => handleAddStageComment("architecture")}
+                onToggleStatus={(comment) => handleToggleCommentStatus("architecture", comment)}
+              />
+
+              <StageRevisionLog revisions={stageRevisions.architecture} />
 
               {/* Activity history */}
               {architectureDraft && (
@@ -2354,9 +3337,12 @@ export default function HomePage() {
                       {archEvents.length === 0 ? (
                         <p className="px-5 py-3 text-xs text-zinc-600">No activity recorded yet.</p>
                       ) : archEvents.map((ev, i) => (
-                        <div key={i} className="flex items-center gap-3 px-5 py-2.5">
+                        <div key={i} className="flex items-start gap-3 px-5 py-2.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0" />
-                          <span className="flex-1 text-xs text-zinc-300">{formatEventType(ev.event_type)}</span>
+                          <div className="flex-1">
+                            <p className="text-xs text-zinc-300">{formatEventType(ev.event_type)}</p>
+                            {ev.detail ? <p className="mt-1 text-[11px] text-zinc-500">{ev.detail}</p> : null}
+                          </div>
                           <span className="text-[10px] text-zinc-600 shrink-0">{new Date(ev.created_at * 1000).toLocaleString()}</span>
                         </div>
                       ))}
@@ -2468,10 +3454,10 @@ export default function HomePage() {
                       <button
                         type="button"
                         onClick={handleSaveUserStories}
-                        disabled={isSavingStories || !editingStoriesContent.trim()}
+                        disabled={!editingStoriesContent.trim()}
                         className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-2 text-sm font-semibold text-white disabled:from-zinc-700 disabled:to-zinc-700"
                       >
-                        {isSavingStories ? "Saving…" : "Save User Stories"}
+                        Review Changes
                       </button>
                     </div>
                   </div>
@@ -2537,6 +3523,18 @@ export default function HomePage() {
                 )}
               </div>
 
+              <StageReviewNotesPanel
+                stage="stories"
+                comments={stageComments.stories}
+                draft={commentDrafts.stories}
+                isSubmitting={submittingCommentStage === "stories"}
+                onDraftChange={(value) => setCommentDrafts((prev) => ({ ...prev, stories: value }))}
+                onSubmit={() => handleAddStageComment("stories")}
+                onToggleStatus={(comment) => handleToggleCommentStatus("stories", comment)}
+              />
+
+              <StageRevisionLog revisions={stageRevisions.stories} />
+
               {/* Activity history */}
               {userStoriesDraft && (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
@@ -2555,9 +3553,12 @@ export default function HomePage() {
                       {storiesEvents.length === 0 ? (
                         <p className="px-5 py-3 text-xs text-zinc-600">No activity recorded yet.</p>
                       ) : storiesEvents.map((ev, i) => (
-                        <div key={i} className="flex items-center gap-3 px-5 py-2.5">
+                        <div key={i} className="flex items-start gap-3 px-5 py-2.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0" />
-                          <span className="flex-1 text-xs text-zinc-300">{formatEventType(ev.event_type)}</span>
+                          <div className="flex-1">
+                            <p className="text-xs text-zinc-300">{formatEventType(ev.event_type)}</p>
+                            {ev.detail ? <p className="mt-1 text-[11px] text-zinc-500">{ev.detail}</p> : null}
+                          </div>
                           <span className="text-[10px] text-zinc-600 shrink-0">{new Date(ev.created_at * 1000).toLocaleString()}</span>
                         </div>
                       ))}
@@ -2702,7 +3703,7 @@ export default function HomePage() {
                       setJiraProjectsFetchFailed(false);
                       try {
                         const params = new URLSearchParams({ domain: jiraConfig.domain, email: jiraConfig.email, token: jiraToken });
-                        const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
+                        const res = await fetch(`${apiUrl("/api/jira/projects")}?${params}`);
                         if (res.ok) {
                           const { projects: list } = await res.json();
                           setJiraProjects(list);
@@ -2729,7 +3730,7 @@ export default function HomePage() {
                       setGithubReposFetchFailed(false);
                       try {
                         const params = new URLSearchParams({ token: githubToken });
-                        const res = await fetch(`${API_BASE}/api/github/repos?${params}`);
+                        const res = await fetch(`${apiUrl("/api/github/repos")}?${params}`);
                         if (res.ok) {
                           const { repos: list } = await res.json();
                           setGithubRepos(list);
@@ -2795,7 +3796,7 @@ export default function HomePage() {
                             </p>
                             <p className="text-xs text-zinc-500 mt-0.5">
                               Go to{" "}
-                              <Link href="/settings" onClick={() => setShowDeliveryModal(false)}
+                              <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
                                 className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
                                 Settings
                               </Link>
@@ -2816,7 +3817,7 @@ export default function HomePage() {
                       <p className="text-xs font-semibold text-amber-300">Jira not configured</p>
                       <p className="text-xs text-zinc-500 mt-0.5">
                         Add your Jira domain, email, token and project key in{" "}
-                        <Link href="/settings" onClick={() => setShowDeliveryModal(false)}
+                        <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
                           className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
                           Settings
                         </Link>
@@ -2872,7 +3873,7 @@ export default function HomePage() {
                             </p>
                             <p className="text-xs text-zinc-500 mt-0.5">
                               Go to{" "}
-                              <Link href="/settings" onClick={() => setShowDeliveryModal(false)}
+                              <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
                                 className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
                                 Settings
                               </Link>
@@ -2893,7 +3894,7 @@ export default function HomePage() {
                       <p className="text-xs font-semibold text-amber-300">GitHub not configured</p>
                       <p className="text-xs text-zinc-500 mt-0.5">
                         Add your GitHub token in{" "}
-                        <Link href="/settings" onClick={() => setShowDeliveryModal(false)}
+                        <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
                           className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
                           Settings
                         </Link>
@@ -2957,6 +3958,13 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      <ReviewDiffModal
+        pendingReview={pendingReview}
+        isApplying={isApplyingReview}
+        onClose={() => setPendingReview(null)}
+        onApply={applyReviewedChange}
+      />
     </div>
   );
 }

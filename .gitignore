@@ -1,6 +1,7 @@
 # Next.js
 frontend/.next/
 frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
 
 # Python
 backend/.venv/

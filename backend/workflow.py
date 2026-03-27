@@ -59,7 +59,13 @@ def normalize_delivery_items(raw_items: list[dict]) -> list[DeliveryItem]:
 
 
 def parse_delivery_items(user_stories_draft: str, model_choice: str) -> list[DeliveryItem]:
-    raw_json = invoke_model(model_choice, build_delivery_items_prompt(user_stories_draft))
+    raw_json = invoke_model(
+        model_choice,
+        build_delivery_items_prompt(
+            model_choice=model_choice,
+            user_stories_draft=user_stories_draft,
+        ),
+    )
     parsed = json.loads(strip_code_fences(raw_json))
     if not isinstance(parsed, list):
         raise ValueError("Expected a JSON array at the top level.")

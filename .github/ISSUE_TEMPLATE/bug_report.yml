@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible defect in the workflow, UI, or integrations.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for reproducible defects. Security-sensitive reports should follow the process in `SECURITY.md` instead of opening a public issue.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short description of the problem.
+      placeholder: Delivery preview resets selected target after switching stages
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide exact steps so another contributor can reproduce the bug.
+      placeholder: |
+        1. Open project ...
+        2. Generate user stories ...
+        3. Open delivery modal ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Backend workflow
+        - Frontend workspace
+        - Prompt profiles
+        - Jira integration
+        - GitHub integration
+        - File ingestion
+        - Setup / docs
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, browser, Python/Node versions, and model backend if relevant.
+      placeholder: macOS 15, Chrome 136, Python 3.11, Node 20, Ollama llama3
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste relevant logs or add screenshots if they help.
+      render: shell

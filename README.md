@@ -2,13 +2,15 @@
 
 A self-hosted AI requirements pipeline for engineering teams.
 
+Status: alpha. The core workflow is usable, but extension points and revision governance are still evolving.
+
 This project turns rough product ideas and source documents into a structured delivery flow:
 
 1. Requirement discovery through a system-analyst interview
 2. PRD generation with explicit non-functional requirements
 3. Architecture draft generation with Mermaid diagrams
 4. User story generation grouped by epic
-5. Optional Jira issue creation
+5. Optional delivery publishing to Jira or GitHub
 
 It is designed for teams that want local control, model flexibility, and a workflow they can customize instead of a closed SaaS product.
 
@@ -29,13 +31,26 @@ Most AI product-writing tools stop at "generate a PRD". This project is narrower
 - Engineering managers
 - Internal tooling teams
 - Solution architects
-- Product and engineering teams that already use Jira
+- Product and engineering teams that already use Jira or GitHub
 
 ## Non-goals
 
 - A full multi-user product management suite
 - A hosted collaboration platform
 - A generic agent framework
+
+## Current maturity
+
+This repository is suitable for self-hosted evaluation, internal tooling experiments, and contributor feedback.
+
+What to expect in the current alpha:
+
+- The core workflow is working end to end.
+- Jira and GitHub delivery publishing are implemented.
+- Prompt profiles and model adapters are customizable.
+- Project metadata is persisted in the backend, so project lists are shared across devices that connect to the same host.
+- Stage edits and AI revisions go through review-first diffs before apply.
+- Each stage now has structured review notes, revision metadata, and dependency-aware summary signals.
 
 ## Workflow
 
@@ -53,7 +68,7 @@ The architecture step produces a technical design draft and Mermaid diagrams. Th
 
 ### Stage 4: Deliver
 
-The user stories step generates epic-grouped stories with acceptance criteria and story points. These can then be pushed into Jira.
+The user stories step generates epic-grouped stories with acceptance criteria and story points. These can then be previewed and published to Jira or GitHub.
 
 ## Architecture overview
 
@@ -63,7 +78,7 @@ Browser (Next.js)
      -> LangGraph state + SQLite checkpoints
      -> Model adapters (Ollama / Gemini CLI / Claude CLI / Codex CLI)
      -> File ingestion (PDF / DOCX / XLSX / Markdown)
-     -> Jira REST API
+     -> Jira REST API / GitHub REST API
 ```
 
 ## Repository layout
@@ -71,14 +86,20 @@ Browser (Next.js)
 ```text
 .
 ├── backend/
+│   ├── integrations/
+│   ├── prompt_profiles/
 │   ├── main.py
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
 │   ├── app/
+│   │   ├── settings/
+│   │   └── lib/
 │   ├── package.json
 │   └── .env.example
-├── TASKS.md
+├── docs/
+│   ├── images/
+│   └── project/        # maintainer notes and internal tracking docs
 ├── ROADMAP.md
 └── README.md
 ```
@@ -113,6 +134,32 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+### LAN / multi-device access
+
+If you want to open the UI from another device on the same network, use the default frontend proxy setup instead of pointing the browser to `http://localhost:8000`.
+
+Recommended frontend config:
+
+```env
+NEXT_PUBLIC_API_BASE=/api
+BACKEND_INTERNAL_BASE=http://127.0.0.1:8000
+```
+
+Why this works:
+
+- the browser talks to the same host that served the frontend
+- Next.js rewrites `/api/*` to the local FastAPI backend on the host machine
+- remote devices do not accidentally resolve `localhost` to themselves
+
+This also fixes a common symptom where model selection appears broken on another device. In that case the frontend is usually trying to call `http://localhost:8000` from the remote browser, which points to the remote device itself instead of the machine running the backend.
+
+If you intentionally want the browser to call the backend directly, set `NEXT_PUBLIC_API_BASE` to a full URL such as `http://192.168.1.50:8000` and update backend CORS accordingly.
+
+Important:
+
+- After changing `NEXT_PUBLIC_API_BASE` or `BACKEND_INTERNAL_BASE`, restart the frontend.
+- If the model selector suddenly shows only a fallback state or reports backend-unreachable when you open the app via `http://<host-ip>:3000`, the frontend is usually still using an old direct backend URL or the browser is being blocked by CORS.
+
 ## Configuration
 
 ### Backend environment variables
@@ -129,7 +176,8 @@ See `backend/.env.example`.
 
 See `frontend/.env.example`.
 
-- `NEXT_PUBLIC_API_BASE`: backend base URL
+- `NEXT_PUBLIC_API_BASE`: public API base used by the browser. Recommended default is `/api` so Next.js can proxy requests.
+- `BACKEND_INTERNAL_BASE`: backend origin used by the Next.js server-side proxy. Typically `http://127.0.0.1:8000`.
 - `NEXT_PUBLIC_DEFAULT_JIRA_DOMAIN`: optional default Jira domain for your team
 
 ## Supported inputs
@@ -148,6 +196,19 @@ See `frontend/.env.example`.
 - Codex CLI
 - OpenAI-compatible APIs
 
+## Context budget management
+
+The backend is model-aware and does not blindly send the full conversation or every artifact on each request.
+
+Current behavior:
+
+- model adapters declare prompt and response token budgets
+- long chat histories are compacted with recent-turn preservation
+- large markdown artifacts are reduced section-by-section instead of naively truncating raw text
+- refinement flows bias retained sections toward the user's latest instruction
+
+This keeps the workflow usable across smaller local models and larger hosted models without requiring the same prompt size everywhere.
+
 ## Extending model backends
 
 Model providers are registered through [backend/model_adapters.py](backend/model_adapters.py).  
@@ -165,8 +226,13 @@ backend/prompt_profiles/default/
 ├── sa_amendment_prefix.md
 ├── sa_chat.md
 ├── architect.md
+├── prd_refine.md
+├── architecture_refine.md
+├── arch_chat.md
 ├── user_stories.md
-└── story_parse.md
+├── user_stories_refine.md
+├── stories_chat.md
+└── delivery_items.md
 ```
 
 To customize prompts:
@@ -181,19 +247,31 @@ If you want prompts outside the repo, set `PROMPT_PROFILE_DIR` to a directory co
 
 Core endpoints:
 
+- `GET /api/projects`
+- `POST /api/projects`
+- `DELETE /api/projects/{thread_id}`
 - `POST /api/chat`
 - `GET /api/chat/{thread_id}`
 - `DELETE /api/chat/{thread_id}`
 - `POST /api/generate_architecture`
+- `POST /api/refine_architecture`
 - `PUT /api/architecture/{thread_id}`
 - `POST /api/generate_user_stories`
-- `POST /api/push_to_jira`
+- `POST /api/refine_user_stories`
+- `POST /api/delivery/preview`
+- `POST /api/delivery/publish`
 - `POST /api/upload`
 - `GET /api/export/{thread_id}`
 - `GET /api/models/check`
 
 `/api/export/{thread_id}` supports `format=markdown` and `format=json`.  
 The export and integration contract is documented in [docs/exports-and-integrations.md](docs/exports-and-integrations.md).
+
+## Shared vs local data
+
+- Project names and project lists are stored in the backend and are shared across devices connected to the same host.
+- Stage content, PRD state, architecture, and user stories are also stored in the backend.
+- The currently selected project is stored per browser so each device can keep its own active workspace.
 
 ## Contributing
 
@@ -210,6 +288,7 @@ See `ROADMAP.md`.
 ## Additional docs
 
 - [Architecture Guide](docs/architecture.md)
+- [Context Budget Management](docs/context-budget.md)
 - [Export and Integration Contract](docs/exports-and-integrations.md)
 - [Model Adapter Contract](docs/model-adapters.md)
 - [Hosted Boundary](docs/hosted-boundary.md)

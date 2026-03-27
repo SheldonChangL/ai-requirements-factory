@@ -33,6 +33,9 @@ class ModelAdapter:
     invoke: Callable[[str], str]
     is_available: Callable[[], bool]
     description: str
+    max_context_tokens: int
+    prompt_budget_tokens: int
+    response_budget_tokens: int
 
 
 def _invoke_ollama(prompt: str) -> str:
@@ -177,30 +180,45 @@ MODEL_ADAPTERS: dict[str, ModelAdapter] = {
         invoke=_invoke_ollama,
         is_available=_check_ollama,
         description="Local Ollama model via LangChain",
+        max_context_tokens=8192,
+        prompt_budget_tokens=6000,
+        response_budget_tokens=1200,
     ),
     "gemini-cli": ModelAdapter(
         model_choice="gemini-cli",
         invoke=lambda prompt: _invoke_cli(prompt, "gemini", "gemini CLI"),
         is_available=lambda: _check_cli("gemini"),
         description="Gemini CLI subprocess adapter",
+        max_context_tokens=32768,
+        prompt_budget_tokens=24000,
+        response_budget_tokens=2000,
     ),
     "claude-cli": ModelAdapter(
         model_choice="claude-cli",
         invoke=lambda prompt: _invoke_cli(prompt, "claude", "claude CLI"),
         is_available=lambda: _check_cli("claude"),
         description="Claude CLI subprocess adapter",
+        max_context_tokens=200000,
+        prompt_budget_tokens=140000,
+        response_budget_tokens=4000,
     ),
     "codex-cli": ModelAdapter(
         model_choice="codex-cli",
         invoke=lambda prompt: _invoke_cli(prompt, "codex", "codex CLI"),
         is_available=lambda: _check_cli("codex"),
         description="Codex CLI subprocess adapter",
+        max_context_tokens=128000,
+        prompt_budget_tokens=90000,
+        response_budget_tokens=4000,
     ),
     "openai-compatible": ModelAdapter(
         model_choice="openai-compatible",
         invoke=_invoke_openai_compatible,
         is_available=_check_openai_compatible,
         description="OpenAI-compatible chat completions adapter",
+        max_context_tokens=128000,
+        prompt_budget_tokens=90000,
+        response_budget_tokens=4000,
     ),
 }
 
@@ -209,7 +227,7 @@ def get_supported_model_choices() -> list[str]:
     return list(MODEL_ADAPTERS.keys())
 
 
-def invoke_model(model_choice: str, prompt: str) -> str:
+def get_model_adapter(model_choice: str) -> ModelAdapter:
     normalized = model_choice.strip().lower()
     adapter = MODEL_ADAPTERS.get(normalized)
     if adapter is None:
@@ -217,4 +235,9 @@ def invoke_model(model_choice: str, prompt: str) -> str:
             f"Unsupported model_choice '{model_choice}'. "
             f"Valid options: {sorted(MODEL_ADAPTERS)}."
         )
+    return adapter
+
+
+def invoke_model(model_choice: str, prompt: str) -> str:
+    adapter = get_model_adapter(model_choice)
     return adapter.invoke(prompt)

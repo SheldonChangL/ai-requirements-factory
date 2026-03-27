@@ -21,7 +21,16 @@ import {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "/api").replace(/\/$/, "");
+
+function apiUrl(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (!API_BASE) return normalizedPath;
+  if (API_BASE.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${API_BASE}${normalizedPath.slice(4)}`;
+  }
+  return `${API_BASE}${normalizedPath}`;
+}
 
 function Spinner({ className = "w-4 h-4" }: { className?: string }) {
   return (
@@ -237,7 +246,7 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
     setProjects([]);
     try {
       const params = new URLSearchParams({ domain: cfg.domain, email: cfg.email, token });
-      const res = await fetch(`${API_BASE}/api/jira/projects?${params}`);
+      const res = await fetch(`${apiUrl("/api/jira/projects")}?${params}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         const msg = typeof err.detail === "string" ? err.detail : `HTTP ${res.status}`;
@@ -360,7 +369,7 @@ function GitHubPanel({ onSaved }: { onSaved: () => void }) {
     setRepos([]);
     try {
       const params = new URLSearchParams({ token });
-      const res = await fetch(`${API_BASE}/api/github/repos?${params}`);
+      const res = await fetch(`${apiUrl("/api/github/repos")}?${params}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         const msg = typeof err.detail === "string" ? err.detail : `HTTP ${res.status}`;
@@ -487,6 +496,7 @@ function ConfigPanel({
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
+  const [workspaceHref, setWorkspaceHref] = useState("/");
   const [selectedId, setSelectedId] = useState<IntegrationId | null>(null);
   const [configuredMap, setConfiguredMap] = useState<Record<string, boolean>>({});
   const panelRef = useRef<HTMLDivElement>(null);
@@ -498,7 +508,14 @@ export default function SettingsPage() {
     setConfiguredMap(map);
   }
 
-  useEffect(() => { refreshConfigured(); }, []);
+  useEffect(() => {
+    refreshConfigured();
+    const projectFromQuery =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("project")?.trim();
+    setWorkspaceHref(projectFromQuery ? `/?project=${encodeURIComponent(projectFromQuery)}` : "/");
+  }, []);
 
   function handleSelect(id: IntegrationId) {
     setSelectedId((prev) => (prev === id ? null : id));
@@ -512,7 +529,7 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       {/* Top bar */}
       <header className="sticky top-0 z-10 flex items-center gap-3 px-6 py-3 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-sm">
-        <Link href="/"
+        <Link href={workspaceHref}
           className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-200 transition-colors">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />

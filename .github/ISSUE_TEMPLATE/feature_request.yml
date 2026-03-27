@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a new capability, workflow, or integration.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for changes that materially improve the product or extension points. Keep requests concrete and tied to a user workflow.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow gap
+      description: What workflow is blocked or awkward today?
+      placeholder: Teams need a tracker-neutral export target so they can review delivery items before choosing Jira or GitHub.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the change you want to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workaround exists today, if any?
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - New integration target
+        - Workflow / stage model
+        - Prompt customization
+        - UI / UX
+        - Docs / onboarding
+        - Developer extension point
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Expected impact
+      description: Who benefits and what outcome improves?

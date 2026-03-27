@@ -8,7 +8,7 @@ This repository is intended for self-hosted deployment. Operators are responsibl
 
 Please do not open a public issue for security-sensitive reports.
 
-Send a private report to the project maintainer with:
+Send a private report to the project maintainer or use GitHub private vulnerability reporting if it is enabled for the repository. Include:
 
 - A description of the issue
 - Reproduction steps
