@@ -34,7 +34,7 @@ I built this because most AI writing tools stop at "generate a PRD" and leave th
 
 Apache-2.0 licensed. Feedback welcome — especially from teams who've tried to operationalize AI-generated requirements.
 
-GitHub: [REPO_URL]
+GitHub: https://github.com/SheldonChangL/ai-requirements-factory
 
 ---
 
@@ -61,7 +61,7 @@ Open-sourced my requirements pipeline tool. It's designed for engineering teams 
 
 **Tech stack:** Next.js + FastAPI + LangGraph + SQLite
 
-Apache-2.0 | [REPO_URL]
+Apache-2.0 | https://github.com/SheldonChangL/ai-requirements-factory
 
 ---
 
@@ -89,7 +89,7 @@ Key design decisions:
 
 I'm not trying to replace product managers — this is for teams that already know what they want but spend too much time on the mechanical work of structuring and distributing it.
 
-GitHub: [REPO_URL]
+GitHub: https://github.com/SheldonChangL/ai-requirements-factory
 
 ---
 
@@ -118,7 +118,7 @@ Stack: Next.js, FastAPI, LangGraph, SQLite. Apache-2.0.
 
 Would love feedback from anyone who's tried to automate the requirements → delivery gap.
 
-GitHub: [REPO_URL]
+GitHub: https://github.com/SheldonChangL/ai-requirements-factory
 
 ---
 
@@ -174,7 +174,7 @@ Public alpha. The core workflow is end-to-end functional. Stage editing, review 
 
 Apache-2.0 licensed. Contributions welcome.
 
-GitHub: [REPO_URL]
+GitHub: https://github.com/SheldonChangL/ai-requirements-factory
 
 ---
 
@@ -184,7 +184,7 @@ GitHub: [REPO_URL]
 
 Not another "generate a PRD" tool. This is a full staged workflow: Discovery → PRD → Architecture → User Stories → Delivery.
 
-🔗 [REPO_URL]
+🔗 https://github.com/SheldonChangL/ai-requirements-factory
 
 **2/6** The AI agent doesn't just accept your input and generate. It interviews you first — asking structured follow-up questions until requirements are actually clear.
 
