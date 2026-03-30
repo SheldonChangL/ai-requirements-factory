@@ -112,7 +112,23 @@ Browser (Next.js)
 - Node.js 18+
 - Ollama if you want to run a local model
 
-### Backend
+### One-command start
+
+```bash
+./start.sh
+```
+
+This installs dependencies, starts the backend and frontend, and opens the app. Logs go to `backend.log` and `frontend.log`. To stop both services:
+
+```bash
+./stop.sh
+```
+
+### Manual setup
+
+If you prefer to run each service separately:
+
+**Backend**
 
 ```bash
 cd backend
@@ -123,7 +139,7 @@ export $(grep -v '^#' .env.example | xargs)
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Frontend
+**Frontend**
 
 ```bash
 cd frontend
@@ -171,6 +187,9 @@ See `backend/.env.example`.
 - `CORS_ALLOW_ORIGINS`: comma-separated list of allowed origins
 - `PROMPT_PROFILE`: prompt profile name under `backend/prompt_profiles/`
 - `PROMPT_PROFILE_DIR`: optional absolute path to a custom prompt directory
+- `OPENAI_COMPAT_BASE_URL`: base URL for OpenAI-compatible API providers
+- `OPENAI_COMPAT_API_KEY`: API key for the OpenAI-compatible provider
+- `OPENAI_COMPAT_MODEL`: model name for the OpenAI-compatible provider
 
 ### Frontend environment variables
 
@@ -245,26 +264,54 @@ If you want prompts outside the repo, set `PROMPT_PROFILE_DIR` to a directory co
 
 ## Public API
 
-Core endpoints:
+### Projects and chat
 
-- `GET /api/projects`
-- `POST /api/projects`
-- `DELETE /api/projects/{thread_id}`
-- `POST /api/chat`
-- `GET /api/chat/{thread_id}`
-- `DELETE /api/chat/{thread_id}`
-- `POST /api/generate_architecture`
-- `POST /api/refine_architecture`
-- `PUT /api/architecture/{thread_id}`
-- `POST /api/generate_user_stories`
-- `POST /api/refine_user_stories`
-- `POST /api/delivery/preview`
-- `POST /api/delivery/publish`
-- `POST /api/upload`
-- `GET /api/export/{thread_id}`
-- `GET /api/models/check`
+- `GET /api/projects` — list all projects
+- `POST /api/projects` — create a project
+- `DELETE /api/projects/{thread_id}` — delete a project
+- `POST /api/chat` — send a message during discovery
+- `GET /api/chat/{thread_id}` — retrieve chat history
+- `DELETE /api/chat/{thread_id}` — clear chat history
 
-`/api/export/{thread_id}` supports `format=markdown` and `format=json`.  
+### Generation and refinement
+
+- `POST /api/refine_prd` — refine the PRD with instructions
+- `PUT /api/prd/{thread_id}` — save manual PRD edits
+- `POST /api/reset_prd/{thread_id}` — reset PRD to last generated version
+- `POST /api/generate_architecture` — generate architecture draft
+- `POST /api/refine_architecture` — refine architecture with instructions
+- `PUT /api/architecture/{thread_id}` — save manual architecture edits
+- `POST /api/generate_user_stories` — generate user stories
+- `POST /api/refine_user_stories` — refine user stories with instructions
+- `PUT /api/user_stories/{thread_id}` — save manual user story edits
+
+### Stage workflow
+
+- `POST /api/stage/{stage}/chat` — stage-scoped chat
+- `GET /api/stage/{stage}/chat/{thread_id}` — stage chat history
+- `POST /api/stage/{stage}/comments/{thread_id}` — add a review comment
+- `GET /api/stage/{stage}/comments/{thread_id}` — list review comments
+- `PATCH /api/stage/comment/{comment_id}` — update a comment
+- `GET /api/stage/{stage}/events/{thread_id}` — stage activity events
+- `GET /api/stage/{stage}/revisions/{thread_id}` — stage revision history
+- `PATCH /api/stage/{stage}/status/{thread_id}` — update stage status
+- `GET /api/stage/statuses/{thread_id}` — all stage statuses
+- `GET /api/stage/summaries/{thread_id}` — dependency-aware stage summaries
+
+### Delivery and integrations
+
+- `POST /api/delivery/preview` — preview delivery items before publish
+- `POST /api/delivery/publish` — publish to Jira or GitHub
+- `GET /api/jira/projects` — list Jira projects
+- `GET /api/github/repos` — list GitHub repositories
+
+### Utilities
+
+- `POST /api/upload` — upload source files
+- `GET /api/export/{thread_id}` — export project (`format=markdown` or `format=json`)
+- `GET /api/models/check` — check available models
+- `GET /health` — backend health check
+
 The export and integration contract is documented in [docs/exports-and-integrations.md](docs/exports-and-integrations.md).
 
 ## Shared vs local data
