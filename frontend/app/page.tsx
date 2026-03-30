@@ -1561,6 +1561,56 @@ export default function HomePage() {
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [userInput]);
 
+  const syncWorkspaceState = useCallback(async (threadId: string) => {
+    const [threadRes, statusesRes, summariesRes] = await Promise.all([
+      fetch(apiUrl(`/api/chat/${threadId}`)),
+      fetch(apiUrl(`/api/stage/statuses/${threadId}`)),
+      fetch(apiUrl(`/api/stage/summaries/${threadId}`)),
+    ]);
+
+    if (threadRes.ok) {
+      const threadData = await threadRes.json() as ThreadStateResponse;
+      setMessages(
+        threadData.messages.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        }))
+      );
+      setPrdDraft(threadData.current_prd ?? "");
+      setIsReady(threadData.is_ready ?? false);
+      setArchitectureDraft(threadData.architecture_draft ?? "");
+      setUserStoriesDraft(threadData.user_stories_draft ?? "");
+
+      if (threadData.user_stories_draft) {
+        setActiveWorkspaceStage("stories");
+      } else if (threadData.architecture_draft) {
+        setActiveWorkspaceStage("architecture");
+      } else {
+        setActiveWorkspaceStage("prd");
+      }
+    }
+
+    if (statusesRes.ok) {
+      const statuses = await statusesRes.json() as {
+        prd?: StageStatus;
+        architecture?: StageStatus;
+        stories?: StageStatus;
+      };
+      setPrdStatus((statuses.prd ?? "draft") as StageStatus);
+      setArchStatus((statuses.architecture ?? "draft") as StageStatus);
+      setStoriesStatus((statuses.stories ?? "draft") as StageStatus);
+    }
+
+    if (summariesRes.ok) {
+      const summaries = await summariesRes.json() as Record<WorkspaceStage, StageSummary>;
+      setStageSummaries({
+        prd: summaries.prd,
+        architecture: summaries.architecture,
+        stories: summaries.stories,
+      });
+    }
+  }, []);
+
   // ── Project management ──────────────────────────────────────────────────
   const createProject = async () => {
     const name = window.prompt("Project name:")?.trim();
@@ -1655,6 +1705,7 @@ export default function HomePage() {
         content: "PRD has been reset. Please continue refining your requirements.",
       },
     ]);
+    await syncWorkspaceState(activeThreadId);
     await refreshStageGovernance(activeThreadId);
   };
 
@@ -1760,6 +1811,7 @@ export default function HomePage() {
         resetStatusesForStage("stories");
       }
 
+      await syncWorkspaceState(activeThreadId);
       await refreshStageGovernance(activeThreadId);
       setPendingReview(null);
     } catch (e) {
@@ -1840,10 +1892,9 @@ export default function HomePage() {
         body: JSON.stringify({ thread_id: activeThreadId, model_choice: modelChoice }),
       });
       if (!res.ok) throw new Error("Failed");
-      const data = await res.json();
-      setArchitectureDraft(data.architecture_draft);
-      setActiveWorkspaceStage("architecture");
+      await res.json();
       resetStatusesForStage("architecture");
+      await syncWorkspaceState(activeThreadId);
       await refreshStageGovernance(activeThreadId);
     } catch (e) {
       console.error(e);
@@ -2077,11 +2128,9 @@ export default function HomePage() {
   const handleRegenerateArchitecture = async () => {
     if (!activeThreadId) return;
     const confirmed = window.confirm(
-      "Regenerate architecture? This will clear the current architecture and user stories."
+      "Regenerate architecture? The current architecture stays visible until the new version is ready."
     );
     if (!confirmed) return;
-    setArchitectureDraft("");
-    setUserStoriesDraft("");
     setIsEditingArch(false);
     await handleGenerateArchitecture();
   };
@@ -2097,10 +2146,9 @@ export default function HomePage() {
         body: JSON.stringify({ thread_id: activeThreadId, model_choice: modelChoice }),
       });
       if (!res.ok) throw new Error("Failed");
-      const data = await res.json();
-      setUserStoriesDraft(data.user_stories_draft);
-      setActiveWorkspaceStage("stories");
+      await res.json();
       resetStatusesForStage("stories");
+      await syncWorkspaceState(activeThreadId);
       await refreshStageGovernance(activeThreadId);
     } catch (e) {
       console.error(e);
@@ -2112,10 +2160,9 @@ export default function HomePage() {
   const handleRegenerateUserStories = async () => {
     if (!activeThreadId) return;
     const confirmed = window.confirm(
-      "Regenerate user stories? This will replace the current user stories draft."
+      "Regenerate user stories? The current backlog stays visible until the new version is ready."
     );
     if (!confirmed) return;
-    setUserStoriesDraft("");
     setIsEditingStories(false);
     await handleGenerateUserStories();
   };
@@ -2321,13 +2368,21 @@ export default function HomePage() {
         ]);
         setPrdDraft(data.current_prd);
         setIsReady(data.is_ready);
+
+        try {
+          await syncWorkspaceState(activeThreadId);
+        } catch {
+          // Fall back to the optimistic main-thread update above.
+        }
+
+        await refreshStageGovernance(activeThreadId);
       } catch (err: unknown) {
         setError(`Failed to get response: ${err instanceof Error ? err.message : "Unknown error"}`);
       } finally {
         setIsLoading(false);
       }
     },
-    [activeThreadId, modelChoice]
+    [activeThreadId, modelChoice, syncWorkspaceState]
   );
 
   // ── Send from text input ────────────────────────────────────────────────
@@ -3216,9 +3271,10 @@ export default function HomePage() {
                         <button
                           type="button"
                           onClick={handleRegenerateArchitecture}
-                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-indigo-500/60 hover:text-indigo-300"
+                          disabled={isGeneratingArch}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-indigo-500/60 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          Regenerate
+                          {isGeneratingArch ? "Regenerating…" : "Regenerate"}
                         </button>
                       </>
                     )}
@@ -3241,6 +3297,11 @@ export default function HomePage() {
                 ) : (
                   <p className="mt-2 text-xs text-zinc-500">The PRD is ready. Generate architecture here when you want to move into solution design.</p>
                 )}
+                {isGeneratingArch && architectureDraft && (
+                  <div className="mt-3 rounded-lg border border-indigo-700/40 bg-indigo-950/30 px-3 py-2 text-xs text-indigo-200">
+                    Regenerating architecture. The current design stays visible until the new version is ready.
+                  </div>
+                )}
               </div>
 
               {architectureDraft && !isEditingArch && (
@@ -3257,12 +3318,7 @@ export default function HomePage() {
               )}
 
               <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-5">
-                {isGeneratingArch ? (
-                  <div className="flex flex-col items-center gap-3 py-12 text-center">
-                    <Spinner className="w-7 h-7 text-indigo-400" />
-                    <p className="text-sm text-zinc-300">Architect is designing the system…</p>
-                  </div>
-                ) : isEditingArch ? (
+                {isEditingArch ? (
                   <div className="space-y-3">
                     <div className="rounded-lg border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
                       Saving architecture changes will clear User Stories.
@@ -3292,10 +3348,23 @@ export default function HomePage() {
                     </div>
                   </div>
                 ) : architectureDraft ? (
-                  <div className="prose prose-invert prose-sm max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
-                      {architectureDraft}
-                    </ReactMarkdown>
+                  <div className="space-y-4">
+                    {isGeneratingArch && (
+                      <div className="flex items-center gap-2 rounded-lg border border-indigo-700/40 bg-indigo-950/30 px-3 py-2 text-xs text-indigo-200">
+                        <Spinner className="w-3.5 h-3.5 text-indigo-300" />
+                        <span>Generating a new architecture version…</span>
+                      </div>
+                    )}
+                    <div className="prose prose-invert prose-sm max-w-none">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
+                        {architectureDraft}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                ) : isGeneratingArch ? (
+                  <div className="flex flex-col items-center gap-3 py-12 text-center">
+                    <Spinner className="w-7 h-7 text-indigo-400" />
+                    <p className="text-sm text-zinc-300">Architect is designing the system…</p>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -3394,9 +3463,10 @@ export default function HomePage() {
                         <button
                           type="button"
                           onClick={handleRegenerateUserStories}
-                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-emerald-500/60 hover:text-emerald-300"
+                          disabled={isGeneratingStories}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-zinc-300 transition-colors hover:border-emerald-500/60 hover:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          Regenerate
+                          {isGeneratingStories ? "Regenerating…" : "Regenerate"}
                         </button>
                       </>
                     )}
@@ -3419,6 +3489,11 @@ export default function HomePage() {
                 ) : (
                   <p className="mt-2 text-xs text-zinc-500">Architecture is ready. Generate the initial user stories set here.</p>
                 )}
+                {isGeneratingStories && userStoriesDraft && (
+                  <div className="mt-3 rounded-lg border border-emerald-700/40 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
+                    Regenerating user stories. The current backlog stays visible until the new version is ready.
+                  </div>
+                )}
               </div>
 
               {userStoriesDraft && !isEditingStories && (
@@ -3435,12 +3510,7 @@ export default function HomePage() {
               )}
 
               <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-5">
-                {isGeneratingStories ? (
-                  <div className="flex flex-col items-center gap-3 py-12 text-center">
-                    <Spinner className="w-7 h-7 text-emerald-400" />
-                    <p className="text-sm text-zinc-300">Writing user stories and acceptance criteria…</p>
-                  </div>
-                ) : isEditingStories ? (
+                {isEditingStories ? (
                   <div className="space-y-3">
                     <textarea
                       value={editingStoriesContent}
@@ -3468,6 +3538,12 @@ export default function HomePage() {
                   </div>
                 ) : userStoriesDraft ? (
                   <>
+                    {isGeneratingStories && (
+                      <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-700/40 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
+                        <Spinner className="w-3.5 h-3.5 text-emerald-300" />
+                        <span>Generating a new user stories version…</span>
+                      </div>
+                    )}
                     {deliveryPushResult && (
                       <div className="mb-4 flex items-start gap-2 rounded-xl border border-blue-700/50 bg-blue-950/40 px-4 py-3 text-sm">
                         <svg className="mt-0.5 h-4 w-4 shrink-0 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
@@ -3516,6 +3592,11 @@ export default function HomePage() {
                       </ReactMarkdown>
                     </div>
                   </>
+                ) : isGeneratingStories ? (
+                  <div className="flex flex-col items-center gap-3 py-12 text-center">
+                    <Spinner className="w-7 h-7 text-emerald-400" />
+                    <p className="text-sm text-zinc-300">Writing user stories and acceptance criteria…</p>
+                  </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
                     <p className="text-sm font-medium text-zinc-400">{architectureDraft ? "User stories not generated yet" : "User stories are blocked"}</p>

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -72,6 +73,51 @@ def _invoke_cli(prompt: str, command: str, display_name: str) -> str:
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"{display_name} timed out after 120 seconds.") from exc
+
+
+def _invoke_codex_cli(prompt: str) -> str:
+    output_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w+", delete=False) as output_file:
+            output_path = output_file.name
+
+        result = subprocess.run(
+            [
+                "codex",
+                "exec",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "-o",
+                output_path,
+                prompt,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            input="",
+        )
+        if result.returncode != 0:
+            stderr_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise RuntimeError(f"codex CLI exited with code {result.returncode}: {stderr_msg}")
+
+        with open(output_path, "r", encoding="utf-8") as handle:
+            output = handle.read().strip()
+        if not output:
+            raise RuntimeError("codex CLI returned empty output.")
+        return output
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "codex CLI not found. Install it and ensure it is on your PATH."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("codex CLI timed out after 180 seconds.") from exc
+    finally:
+        if output_path:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
 
 
 def _check_ollama() -> bool:
@@ -204,7 +250,7 @@ MODEL_ADAPTERS: dict[str, ModelAdapter] = {
     ),
     "codex-cli": ModelAdapter(
         model_choice="codex-cli",
-        invoke=lambda prompt: _invoke_cli(prompt, "codex", "codex CLI"),
+        invoke=_invoke_codex_cli,
         is_available=lambda: _check_cli("codex"),
         description="Codex CLI subprocess adapter",
         max_context_tokens=128000,

@@ -166,6 +166,20 @@ fi
 # ---------------------------------------------------------------------------
 section "Frontend dependencies"
 
+NODE_BIN="$(command -v node || true)"
+if [ -n "$NODE_BIN" ]; then
+  NODE_VERSION="$("$NODE_BIN" -v 2>/dev/null || true)"
+  info "Node: ${NODE_VERSION:-unknown}"
+  case "$NODE_VERSION" in
+    v22.*)
+      warn "Node 22 may emit a harmless DEP0060 warning in Next.js dev proxy mode."
+      warn "Node 20 LTS is the recommended runtime if you want quieter frontend logs."
+      ;;
+  esac
+else
+  warn "node not found in PATH."
+fi
+
 if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
   warn "node_modules not found. Running npm install..."
   cd "$FRONTEND_DIR"

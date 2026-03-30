@@ -112,6 +112,8 @@ Browser (Next.js)
 - Node.js 18+
 - At least one model backend available on the host: Ollama, Gemini CLI, Claude CLI, Codex CLI, or an OpenAI-compatible API
 
+Node.js 20 LTS is the recommended runtime. Node 22 may print a harmless `DEP0060` warning in Next.js dev proxy mode.
+
 ### One-command start
 
 ```bash
