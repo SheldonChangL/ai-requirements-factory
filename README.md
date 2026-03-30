@@ -110,7 +110,7 @@ Browser (Next.js)
 
 - Python 3.11+
 - Node.js 18+
-- Ollama if you want to run a local model
+- At least one model backend available on the host: Ollama, Gemini CLI, Claude CLI, Codex CLI, or an OpenAI-compatible API
 
 ### One-command start
 
