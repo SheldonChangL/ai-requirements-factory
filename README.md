@@ -14,7 +14,7 @@ This project turns rough product ideas and source documents into a structured de
 
 It is designed for teams that want local control, model flexibility, and a workflow they can customize instead of a closed SaaS product.
 
-![App Home](docs/images/app-home.png)
+![Workspace Demo](docs/images/ai-factory-demo-readme.gif)
 
 ## Why this exists
 
