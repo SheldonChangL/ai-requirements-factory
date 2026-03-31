@@ -17,9 +17,30 @@ import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from langchain_ollama import ChatOllama
+
+
+def _load_env_file() -> None:
+    env_path = Path(__file__).with_name(".env")
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip("'").strip('"')
+        os.environ.setdefault(key, value)
+
+
+_load_env_file()
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")

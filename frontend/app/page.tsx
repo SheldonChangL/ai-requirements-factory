@@ -1250,6 +1250,10 @@ export default function HomePage() {
   const [jiraToken, setJiraToken]                 = useState("");
   const [githubConfig, setGitHubConfig]           = useState<GitHubConfig>({ owner: "", repo: "" });
   const [githubToken, setGitHubToken]             = useState("");
+  const [serverConfig, setServerConfig]           = useState<{
+    jira?: { configured: boolean; domain: string | null };
+    github?: { configured: boolean };
+  } | null>(null);
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
   const [deliveryTarget, setDeliveryTarget]       = useState<DeliveryTarget>("jira");
   const [isPublishingDelivery, setIsPublishingDelivery] = useState(false);
@@ -1331,6 +1335,20 @@ export default function HomePage() {
   const [deliveryPreviewItems, setDeliveryPreviewItems] = useState<{ title: string; group: string; labels: string[]; estimate: number }[]>([]);
   // editable labels per item index: Map<itemIndex, string[]>
   const [editableLabels, setEditableLabels] = useState<Map<number, string[]>>(new Map());
+  // per-item delivery target: Map<itemIndex, projectKey | "owner/repo">
+  const [itemTargets, setItemTargets] = useState<Map<number, string>>(new Map());
+  // "create new" inline form state for delivery modal
+  const [showCreateNew, setShowCreateNew]   = useState(false);
+  const [createNewName, setCreateNewName]   = useState("");
+  const [createNewKey, setCreateNewKey]     = useState("");  // Jira only
+  const [createNewPrivate, setCreateNewPrivate] = useState(false);  // GitHub only
+  const [isCreatingNew, setIsCreatingNew]   = useState(false);
+  const [createNewError, setCreateNewError] = useState<string | null>(null);
+
+  const hasServerJiraConfig = !!serverConfig?.jira?.configured;
+  const hasServerGitHubConfig = !!serverConfig?.github?.configured;
+  const jiraConfigAvailable = isJiraConfigured() || hasServerJiraConfig;
+  const githubConfigAvailable = isGitHubConfigured() || hasServerGitHubConfig;
   const [isLoadingPreview, setIsLoadingPreview]   = useState(false);
   const [pendingReview, setPendingReview]         = useState<PendingReview | null>(null);
   const [isApplyingReview, setIsApplyingReview]   = useState(false);
@@ -1424,6 +1442,10 @@ export default function HomePage() {
     setGitHubConfig(loadGitHubConfig());
     loadJiraToken().then(setJiraToken);
     loadGitHubToken().then(setGitHubToken);
+    fetch(apiUrl("/api/server-config"))
+      .then((r) => r.json())
+      .then((data) => setServerConfig(data))
+      .catch(() => {});
   }, []);
 
   // ── Hydrate chat state whenever active thread changes ───────────────────
@@ -2197,6 +2219,11 @@ export default function HomePage() {
     setSelectedGithubRepo("");
     setDeliveryStep("configure");
     setDeliveryPreviewItems([]);
+    setShowCreateNew(false);
+    setCreateNewName("");
+    setCreateNewKey("");
+    setCreateNewPrivate(false);
+    setCreateNewError(null);
     // Reload config from storage each time the modal opens so it picks up any
     // changes the user may have saved in the Settings page mid-session.
     const freshJiraCfg = loadJiraConfig();
@@ -2207,9 +2234,27 @@ export default function HomePage() {
     ]);
     setJiraToken(freshJiraToken);
     setGitHubToken(freshGithubToken);
+    let currentServerConfig = serverConfig;
+    if (!currentServerConfig) {
+      try {
+        const response = await fetch(apiUrl("/api/server-config"));
+        if (response.ok) {
+          currentServerConfig = await response.json();
+          setServerConfig(currentServerConfig);
+        }
+      } catch {
+        // Ignore and continue with local config only.
+      }
+    }
 
     // Auto-fetch Jira projects
-    if (target === "jira" && freshJiraCfg.domain && freshJiraCfg.email && freshJiraToken) {
+    if (
+      target === "jira" &&
+      (
+        (freshJiraCfg.domain && freshJiraCfg.email && freshJiraToken) ||
+        currentServerConfig?.jira?.configured
+      )
+    ) {
       setIsLoadingJiraProjects(true);
       try {
         const params = new URLSearchParams({
@@ -2233,7 +2278,7 @@ export default function HomePage() {
     }
 
     // Auto-fetch GitHub repos
-    if (target === "github" && freshGithubToken) {
+    if (target === "github" && (freshGithubToken || currentServerConfig?.github?.configured)) {
       setIsLoadingGithubRepos(true);
       try {
         const params = new URLSearchParams({ token: freshGithubToken });
@@ -2284,6 +2329,13 @@ export default function HomePage() {
         initLabels.set(i, [...item.labels]);
       });
       setEditableLabels(initLabels);
+      // init per-item targets to the currently selected project/repo
+      const defaultTarget = deliveryTarget === "jira" ? selectedJiraProjectKey : selectedGithubRepo;
+      const initTargets = new Map<number, string>();
+      (data.items as unknown[]).forEach((_, i) => {
+        initTargets.set(i, defaultTarget);
+      });
+      setItemTargets(initTargets);
       setDeliveryStep("preview");
     } catch (e: unknown) {
       setDeliveryErrorMsg(e instanceof Error ? e.message : "Preview failed");
@@ -2314,6 +2366,7 @@ export default function HomePage() {
           github_owner: selectedGithubRepo.split("/")[0] ?? "",
           github_repo: selectedGithubRepo.split("/")[1] ?? "",
           github_token: githubToken,
+          item_targets: Array.from({ length: deliveryPreviewItems.length }, (_, i) => itemTargets.get(i) ?? ""),
         }),
       });
       if (!res.ok) {
@@ -3698,10 +3751,7 @@ export default function HomePage() {
                 <div className="px-5 py-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-zinc-400">
-                      <span className="font-semibold text-zinc-200">{deliveryPreviewItems.length}</span> item{deliveryPreviewItems.length !== 1 ? "s" : ""} will be created in{" "}
-                      <span className="font-mono text-zinc-300">
-                        {deliveryTarget === "jira" ? selectedJiraProjectKey : selectedGithubRepo}
-                      </span>
+                      <span className="font-semibold text-zinc-200">{deliveryPreviewItems.length}</span> item{deliveryPreviewItems.length !== 1 ? "s" : ""} ready to publish
                     </p>
                   </div>
                   <div className="rounded-xl border border-zinc-700/60 divide-y divide-zinc-800 max-h-72 overflow-y-auto">
@@ -3731,6 +3781,24 @@ export default function HomePage() {
                               {l} ×
                             </button>
                           ))}
+                        </div>
+                        {/* Per-item target selector */}
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                          <span className="text-[10px] text-zinc-600 shrink-0">→</span>
+                          <select
+                            value={itemTargets.get(i) ?? ""}
+                            onChange={(e) => setItemTargets(new Map(itemTargets).set(i, e.target.value))}
+                            className="flex-1 appearance-none bg-zinc-900 border border-zinc-700/60 rounded px-2 py-0.5 text-[10px] text-zinc-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                          >
+                            {deliveryTarget === "jira"
+                              ? jiraProjects.map((p) => (
+                                  <option key={p.key} value={p.key}>{p.name} ({p.key})</option>
+                                ))
+                              : githubRepos.map((r) => (
+                                  <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+                                ))
+                            }
+                          </select>
                         </div>
                       </div>
                     ))}
@@ -3784,7 +3852,7 @@ export default function HomePage() {
                     setDeliveryTarget("jira");
                     setDeliveryErrorMsg(null);
                     // Auto-fetch projects if not loaded yet
-                    if (jiraProjects.length === 0 && isJiraConfigured() && jiraToken) {
+                    if (jiraProjects.length === 0 && jiraConfigAvailable) {
                       setIsLoadingJiraProjects(true);
                       setJiraProjectsFetchFailed(false);
                       try {
@@ -3811,7 +3879,7 @@ export default function HomePage() {
                   onClick={async () => {
                     setDeliveryTarget("github");
                     setDeliveryErrorMsg(null);
-                    if (githubRepos.length === 0 && isGitHubConfigured() && githubToken) {
+                    if (githubRepos.length === 0 && githubConfigAvailable) {
                       setIsLoadingGithubRepos(true);
                       setGithubReposFetchFailed(false);
                       try {
@@ -3835,14 +3903,14 @@ export default function HomePage() {
 
               {/* Configuration status */}
               {deliveryTarget === "jira" ? (
-                isJiraConfigured() ? (
+                jiraConfigAvailable ? (
                   <div className="space-y-3">
                     <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3 space-y-1.5">
                       <div className="flex items-center gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
                         <p className="text-xs font-semibold text-emerald-300">Jira configured</p>
                       </div>
-                      <p className="text-xs text-zinc-500 font-mono">{jiraConfig.domain}</p>
+                      <p className="text-xs text-zinc-500 font-mono">{jiraConfig.domain || serverConfig?.jira?.domain || "server-configured"}</p>
                     </div>
                     {/* Project selector */}
                     <div>
@@ -3891,6 +3959,94 @@ export default function HomePage() {
                           </div>
                         </div>
                       )}
+                      {/* Create new Jira project */}
+                      {!showCreateNew ? (
+                        <button
+                          type="button"
+                          onClick={() => { setShowCreateNew(true); setCreateNewName(""); setCreateNewKey(""); setCreateNewError(null); }}
+                          className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                        >
+                          + Create new project
+                        </button>
+                      ) : (
+                        <div className="mt-2 space-y-2 rounded-lg border border-zinc-700/60 bg-zinc-900/80 p-3">
+                          <p className="text-[11px] font-semibold text-zinc-400">New Jira Project</p>
+                          <input
+                            type="text"
+                            value={createNewName}
+                            onChange={async (e) => {
+                              setCreateNewName(e.target.value);
+                              if (e.target.value.trim()) {
+                                try {
+                                  const r = await fetch(apiUrl(`/api/jira/projects/key-preview?name=${encodeURIComponent(e.target.value)}`));
+                                  if (r.ok) { const d = await r.json(); setCreateNewKey(d.key); }
+                                } catch { /* ignore */ }
+                              }
+                            }}
+                            placeholder="Project name"
+                            className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                          <div className="flex gap-2 items-center">
+                            <input
+                              type="text"
+                              value={createNewKey}
+                              onChange={(e) => setCreateNewKey(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 10))}
+                              placeholder="KEY"
+                              className="w-24 bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <span className="text-[10px] text-zinc-600">Project key (auto-derived)</span>
+                          </div>
+                          {createNewError && (
+                            <p className="text-[11px] text-red-400">{createNewError}</p>
+                          )}
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!createNewName.trim()) return;
+                                setIsCreatingNew(true);
+                                setCreateNewError(null);
+                                try {
+                                  const res = await fetch(apiUrl("/api/jira/projects"), {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      domain: jiraConfig.domain,
+                                      email: jiraConfig.email,
+                                      token: jiraToken,
+                                      name: createNewName.trim(),
+                                      key: createNewKey.trim(),
+                                    }),
+                                  });
+                                  if (!res.ok) {
+                                    const e = await res.json().catch(() => ({}));
+                                    throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
+                                  }
+                                  const created = await res.json();
+                                  setJiraProjects((prev) => [...prev, created]);
+                                  setSelectedJiraProjectKey(created.key);
+                                  setShowCreateNew(false);
+                                } catch (e: unknown) {
+                                  setCreateNewError(e instanceof Error ? e.message : "Failed to create project");
+                                } finally {
+                                  setIsCreatingNew(false);
+                                }
+                              }}
+                              disabled={isCreatingNew || !createNewName.trim()}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-semibold transition-colors"
+                            >
+                              {isCreatingNew ? <><Spinner className="w-3 h-3" />Creating…</> : "Create"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowCreateNew(false)}
+                              className="px-3 py-1.5 rounded text-[11px] text-zinc-500 hover:text-zinc-200 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -3913,7 +4069,7 @@ export default function HomePage() {
                   </div>
                 )
               ) : (
-                isGitHubConfigured() ? (
+                githubConfigAvailable ? (
                   <div className="space-y-3">
                     <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -3968,6 +4124,83 @@ export default function HomePage() {
                           </div>
                         </div>
                       )}
+                      {/* Create new GitHub repo */}
+                      {!showCreateNew ? (
+                        <button
+                          type="button"
+                          onClick={() => { setShowCreateNew(true); setCreateNewName(""); setCreateNewPrivate(false); setCreateNewError(null); }}
+                          className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                        >
+                          + Create new repository
+                        </button>
+                      ) : (
+                        <div className="mt-2 space-y-2 rounded-lg border border-zinc-700/60 bg-zinc-900/80 p-3">
+                          <p className="text-[11px] font-semibold text-zinc-400">New GitHub Repository</p>
+                          <input
+                            type="text"
+                            value={createNewName}
+                            onChange={(e) => setCreateNewName(e.target.value)}
+                            placeholder="repository-name"
+                            className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                          <label className="flex items-center gap-2 text-[11px] text-zinc-400 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={createNewPrivate}
+                              onChange={(e) => setCreateNewPrivate(e.target.checked)}
+                              className="rounded border-zinc-600"
+                            />
+                            Private repository
+                          </label>
+                          {createNewError && (
+                            <p className="text-[11px] text-red-400">{createNewError}</p>
+                          )}
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!createNewName.trim()) return;
+                                setIsCreatingNew(true);
+                                setCreateNewError(null);
+                                try {
+                                  const res = await fetch(apiUrl("/api/github/repos"), {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      token: githubToken,
+                                      name: createNewName.trim(),
+                                      private: createNewPrivate,
+                                    }),
+                                  });
+                                  if (!res.ok) {
+                                    const e = await res.json().catch(() => ({}));
+                                    throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
+                                  }
+                                  const created = await res.json();
+                                  setGithubRepos((prev) => [...prev, created]);
+                                  setSelectedGithubRepo(created.full_name);
+                                  setShowCreateNew(false);
+                                } catch (e: unknown) {
+                                  setCreateNewError(e instanceof Error ? e.message : "Failed to create repository");
+                                } finally {
+                                  setIsCreatingNew(false);
+                                }
+                              }}
+                              disabled={isCreatingNew || !createNewName.trim()}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-zinc-200 hover:bg-white disabled:opacity-40 text-zinc-950 text-[11px] font-semibold transition-colors"
+                            >
+                              {isCreatingNew ? <><Spinner className="w-3 h-3" />Creating…</> : "Create"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowCreateNew(false)}
+                              className="px-3 py-1.5 rounded text-[11px] text-zinc-500 hover:text-zinc-200 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -4013,13 +4246,13 @@ export default function HomePage() {
                 disabled={
                   isLoadingPreview ||
                   (deliveryTarget === "jira" && (
-                    !isJiraConfigured() ||
+                    !jiraConfigAvailable ||
                     isLoadingJiraProjects ||
                     jiraProjects.length === 0 ||
                     !selectedJiraProjectKey
                   )) ||
                   (deliveryTarget === "github" && (
-                    !isGitHubConfigured() ||
+                    !githubConfigAvailable ||
                     isLoadingGithubRepos ||
                     githubRepos.length === 0 ||
                     !selectedGithubRepo

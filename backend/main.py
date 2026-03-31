@@ -3,6 +3,7 @@ import io
 import os
 import sqlite3
 import urllib.error
+from pathlib import Path
 from uuid import uuid4
 from typing import Annotated, Optional, TypedDict
 
@@ -18,6 +19,25 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
+def _load_env_file() -> None:
+    env_path = Path(__file__).with_name(".env")
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip("'").strip('"')
+        os.environ.setdefault(key, value)
+
+
+_load_env_file()
+
 try:
     from api_errors import error_detail
     from artifacts import (
@@ -26,8 +46,8 @@ try:
         export_project_json,
         export_project_markdown,
     )
-    from integrations.jira import list_jira_projects
-    from integrations.github import list_github_repos
+    from integrations.jira import list_jira_projects, create_jira_project, _derive_project_key
+    from integrations.github import list_github_repos, create_github_repo
     from integrations.registry_map import DELIVERY_INTEGRATIONS
     from model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from prompts import (
@@ -49,8 +69,8 @@ except ModuleNotFoundError:
         export_project_json,
         export_project_markdown,
     )
-    from backend.integrations.jira import list_jira_projects
-    from backend.integrations.github import list_github_repos
+    from backend.integrations.jira import list_jira_projects, create_jira_project, _derive_project_key
+    from backend.integrations.github import list_github_repos, create_github_repo
     from backend.integrations.registry_map import DELIVERY_INTEGRATIONS
     from backend.model_adapters import MODEL_ADAPTERS, get_supported_model_choices, invoke_model
     from backend.prompts import (
@@ -70,6 +90,28 @@ CORS_ALLOW_ORIGINS = [
     for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
     if origin.strip()
 ]
+
+# ---------------------------------------------------------------------------
+# Host-level integration credentials (optional — users can override in UI)
+# ---------------------------------------------------------------------------
+
+SERVER_JIRA_DOMAIN = os.getenv("JIRA_DOMAIN", "").strip()
+SERVER_JIRA_EMAIL  = os.getenv("JIRA_EMAIL",  "").strip()
+SERVER_JIRA_TOKEN  = os.getenv("JIRA_TOKEN",  "").strip()
+SERVER_GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+
+
+def _resolve_jira_creds(domain: str, email: str, token: str) -> tuple[str, str, str]:
+    """Fall back to server-level credentials for any empty field."""
+    return (
+        domain.strip() or SERVER_JIRA_DOMAIN,
+        email.strip()  or SERVER_JIRA_EMAIL,
+        token.strip()  or SERVER_JIRA_TOKEN,
+    )
+
+
+def _resolve_github_token(token: str) -> str:
+    return token.strip() or SERVER_GITHUB_TOKEN
 
 
 # ---------------------------------------------------------------------------
@@ -1743,6 +1785,7 @@ class DeliveryPublishRequest(BaseModel):
     github_owner: str = ""
     github_repo: str = ""
     github_token: str = ""
+    item_targets: list[str] = []  # per-item target (index-matched); "" → use default
 
 
 class DeliveryPublishResponse(BaseModel):
@@ -1750,6 +1793,7 @@ class DeliveryPublishResponse(BaseModel):
     target: str
     created_items: list[str]
     count: int
+    results: list[dict] = []  # per-target breakdown: [{target_project, count, created_items}]
 
 
 @app.post("/api/delivery/preview", response_model=DeliveryPreviewResponse)
@@ -1776,43 +1820,84 @@ async def publish_delivery(request: DeliveryPublishRequest):
     model_choice = validate_model_choice(request.model_choice)
     target = validate_delivery_target(request.target)
     items = parse_delivery_items_or_raise(request.thread_id, model_choice)
-    config = build_delivery_config(
-        target,
-        jira_domain=request.jira_domain,
-        jira_email=request.jira_email,
-        jira_token=request.jira_token,
-        jira_project_key=request.jira_project_key,
-        github_owner=request.github_owner,
-        github_repo=request.github_repo,
-        github_token=request.github_token,
-    )
-    try:
-        result = DELIVERY_INTEGRATIONS[target].publish(items, config)
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        category = "jira_api_error" if target == "jira" else "github_api_error"
-        raise HTTPException(
-            status_code=502,
-            detail=error_detail(category, f"{target} API error (HTTP {exc.code}): {error_body}"),
-        ) from exc
-    except urllib.error.URLError as exc:
-        category = "jira_network_error" if target == "jira" else "github_network_error"
-        raise HTTPException(
-            status_code=502,
-            detail=error_detail(category, f"Could not reach {target}: {exc.reason}"),
-        ) from exc
-    except Exception as exc:
-        category = f"{target}_error"
-        raise HTTPException(
-            status_code=502,
-            detail=error_detail(category, str(exc)),
-        ) from exc
+
+    # Determine default target for items without an explicit assignment
+    if target == "jira":
+        default_target = request.jira_project_key.strip()
+    else:
+        owner = request.github_owner.strip()
+        repo = request.github_repo.strip()
+        default_target = f"{owner}/{repo}" if owner and repo else ""
+
+    # Apply per-item targets from the request, falling back to default
+    for i, item in enumerate(items):
+        assigned = request.item_targets[i].strip() if i < len(request.item_targets) else ""
+        item.target_project = assigned or default_target
+
+    # Group items by target_project
+    from collections import defaultdict
+    groups: dict[str, list] = defaultdict(list)
+    for item in items:
+        groups[item.target_project].append(item)
+
+    all_created: list[str] = []
+    per_target_results: list[dict] = []
+
+    for group_target, group_items in groups.items():
+        if target == "jira":
+            j_domain, j_email, j_token = _resolve_jira_creds(
+                request.jira_domain, request.jira_email, request.jira_token
+            )
+            config = build_delivery_config(
+                target,
+                jira_domain=j_domain,
+                jira_email=j_email,
+                jira_token=j_token,
+                jira_project_key=group_target,
+            )
+        else:
+            parts = group_target.split("/", 1)
+            config = build_delivery_config(
+                target,
+                github_owner=parts[0] if parts else "",
+                github_repo=parts[1] if len(parts) > 1 else "",
+                github_token=_resolve_github_token(request.github_token),
+            )
+
+        try:
+            result = DELIVERY_INTEGRATIONS[target].publish(group_items, config)
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            category = "jira_api_error" if target == "jira" else "github_api_error"
+            raise HTTPException(
+                status_code=502,
+                detail=error_detail(category, f"{target} API error for '{group_target}' (HTTP {exc.code}): {error_body}"),
+            ) from exc
+        except urllib.error.URLError as exc:
+            category = "jira_network_error" if target == "jira" else "github_network_error"
+            raise HTTPException(
+                status_code=502,
+                detail=error_detail(category, f"Could not reach {target} for '{group_target}': {exc.reason}"),
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=error_detail(f"{target}_error", str(exc)),
+            ) from exc
+
+        all_created.extend(result.created)
+        per_target_results.append({
+            "target_project": group_target,
+            "count": result.count,
+            "created_items": result.created,
+        })
 
     return DeliveryPublishResponse(
-        success=result.success,
-        target=result.target,
-        created_items=result.created,
-        count=result.count,
+        success=True,
+        target=target,
+        created_items=all_created,
+        count=len(all_created),
+        results=per_target_results,
     )
 
 
@@ -1856,6 +1941,25 @@ async def push_to_github(request: PushToGitHubRequest):
 
 
 # ---------------------------------------------------------------------------
+# Server configuration endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/server-config")
+async def get_server_config():
+    """Return which integrations have host-level credentials configured.
+    Never exposes actual tokens — only domain/configured flags."""
+    return {
+        "jira": {
+            "configured": bool(SERVER_JIRA_DOMAIN and SERVER_JIRA_EMAIL and SERVER_JIRA_TOKEN),
+            "domain": SERVER_JIRA_DOMAIN or None,
+        },
+        "github": {
+            "configured": bool(SERVER_GITHUB_TOKEN),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Jira projects list endpoint
 # ---------------------------------------------------------------------------
 
@@ -1870,11 +1974,18 @@ class JiraProjectsResponse(BaseModel):
 
 
 @app.get("/api/jira/projects", response_model=JiraProjectsResponse)
-async def get_jira_projects(domain: str, email: str, token: str):
+async def get_jira_projects(domain: str = "", email: str = "", token: str = ""):
     """
     Fetch all accessible Jira projects for the given credentials.
+    Falls back to server-level credentials for any empty field.
     Returns HTTP 401 on auth failure, HTTP 502 on network/other errors.
     """
+    domain, email, token = _resolve_jira_creds(domain, email, token)
+    if not all([domain, email, token]):
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_integration_config", "Jira credentials required."),
+        )
     try:
         projects = list_jira_projects(domain, email, token)
         return JiraProjectsResponse(
@@ -1920,8 +2031,14 @@ class GitHubReposResponse(BaseModel):
 
 
 @app.get("/api/github/repos", response_model=GitHubReposResponse)
-async def get_github_repos(token: str):
-    """Fetch all repos accessible by the given GitHub token."""
+async def get_github_repos(token: str = ""):
+    """Fetch all repos accessible by the given GitHub token. Falls back to server token."""
+    token = _resolve_github_token(token)
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_integration_config", "GitHub token required."),
+        )
     try:
         repos = list_github_repos(token)
         return GitHubReposResponse(repos=[GitHubRepo(**r) for r in repos])
@@ -1945,6 +2062,97 @@ async def get_github_repos(token: str):
             status_code=502,
             detail=error_detail("github_error", str(exc)),
         )
+
+
+# ---------------------------------------------------------------------------
+# Jira create project endpoint
+# ---------------------------------------------------------------------------
+
+class CreateJiraProjectRequest(BaseModel):
+    domain: str = ""
+    email: str = ""
+    token: str = ""
+    name: str
+    key: str = ""  # optional; derived from name if empty
+
+
+@app.post("/api/jira/projects", response_model=JiraProject)
+async def create_jira_project_endpoint(request: CreateJiraProjectRequest):
+    domain, email, token = _resolve_jira_creds(request.domain, request.email, request.token)
+    if not all([domain, email, token]):
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_integration_config", "Jira credentials required."),
+        )
+    if not request.name.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "Project name cannot be empty."),
+        )
+    try:
+        project = create_jira_project(domain, email, token, request.name, request.key or None)
+        return JiraProject(**project)
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("jira_api_error", f"Jira error (HTTP {exc.code}): {error_body}"),
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("jira_network_error", f"Could not reach Jira: {exc.reason}"),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=error_detail("jira_error", str(exc))) from exc
+
+
+@app.get("/api/jira/projects/key-preview")
+async def jira_project_key_preview(name: str):
+    """Return the auto-derived Jira project key for a given name (no auth needed)."""
+    return {"key": _derive_project_key(name)}
+
+
+# ---------------------------------------------------------------------------
+# GitHub create repo endpoint
+# ---------------------------------------------------------------------------
+
+class CreateGitHubRepoRequest(BaseModel):
+    token: str = ""
+    name: str
+    private: bool = False
+    org: str = ""  # optional; creates under org if set
+
+
+@app.post("/api/github/repos", response_model=GitHubRepo)
+async def create_github_repo_endpoint(request: CreateGitHubRepoRequest):
+    token = _resolve_github_token(request.token)
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_integration_config", "GitHub token required."),
+        )
+    if not request.name.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("invalid_input", "Repository name cannot be empty."),
+        )
+    try:
+        repo = create_github_repo(token, request.name, request.private, request.org.strip() or None)
+        return GitHubRepo(**repo)
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("github_api_error", f"GitHub error (HTTP {exc.code}): {error_body}"),
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail("github_network_error", f"Could not reach GitHub: {exc.reason}"),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=error_detail("github_error", str(exc))) from exc
 
 
 # ---------------------------------------------------------------------------

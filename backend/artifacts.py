@@ -12,6 +12,7 @@ class DeliveryItem:
     estimate: int
     group: str
     labels: list[str]
+    target_project: str = ""
 
 
 @dataclass

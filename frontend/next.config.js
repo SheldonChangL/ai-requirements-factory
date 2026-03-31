@@ -1,9 +1,13 @@
 /** @type {import('next').NextConfig} */
+const { version } = require("./package.json");
 const publicApiBase = process.env.NEXT_PUBLIC_API_BASE || "/api";
 const backendInternalBase = (process.env.BACKEND_INTERNAL_BASE || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 const nextConfig = {
   reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_APP_VERSION: version,
+  },
   async rewrites() {
     if (/^https?:\/\//i.test(publicApiBase)) {
       return [];

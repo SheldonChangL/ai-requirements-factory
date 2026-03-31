@@ -224,12 +224,17 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
   const [testing, setTesting]     = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [projects, setProjects]   = useState<{ key: string; name: string; id: string }[]>([]);
+  const [serverJira, setServerJira] = useState<{ configured: boolean; domain: string | null } | null>(null);
 
   useEffect(() => {
     setCfg(loadJiraConfig());
     loadJiraToken().then(setToken);
     setTestResult(null);
     setProjects([]);
+    fetch(apiUrl("/api/server-config"))
+      .then((r) => r.json())
+      .then((d) => setServerJira(d.jira))
+      .catch(() => {});
   }, []);
 
   async function handleSave() {
@@ -265,6 +270,17 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
 
   return (
     <div className="space-y-4">
+      {serverJira?.configured && (
+        <div className="flex items-start gap-2.5 rounded-lg border border-blue-800/40 bg-blue-950/30 px-3 py-2.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 mt-1" />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-blue-300">Server credentials configured</p>
+            <p className="text-[11px] text-zinc-500 mt-0.5">
+              Domain: <span className="font-mono">{serverJira.domain}</span>. Leave fields blank to use them.
+            </p>
+          </div>
+        </div>
+      )}
       <Field label="Jira Domain">
         <input type="text" value={cfg.domain}
           onChange={(e) => { setCfg((c) => ({ ...c, domain: e.target.value })); setProjects([]); setTestResult(null); }}
@@ -288,7 +304,7 @@ function JiraPanel({ onSaved }: { onSaved: () => void }) {
             {showToken ? "Hide" : "Show"}
           </button>
           <button type="button" onClick={handleTest}
-            disabled={testing || !cfg.domain.trim() || !cfg.email.trim() || !token.trim()}
+            disabled={testing || (!serverJira?.configured && (!cfg.domain.trim() || !cfg.email.trim() || !token.trim()))}
             className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-xs text-zinc-300 hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
             {testing ? <Spinner className="w-3.5 h-3.5" /> : (
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -349,11 +365,16 @@ function GitHubPanel({ onSaved }: { onSaved: () => void }) {
   const [testing, setTesting]       = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [repos, setRepos]           = useState<{ full_name: string; owner: string; name: string }[]>([]);
+  const [serverGitHub, setServerGitHub] = useState<{ configured: boolean } | null>(null);
 
   useEffect(() => {
     loadGitHubToken().then(setToken);
     setTestResult(null);
     setRepos([]);
+    fetch(apiUrl("/api/server-config"))
+      .then((r) => r.json())
+      .then((d) => setServerGitHub(d.github))
+      .catch(() => {});
   }, []);
 
   async function handleSave() {
@@ -388,6 +409,15 @@ function GitHubPanel({ onSaved }: { onSaved: () => void }) {
 
   return (
     <div className="space-y-4">
+      {serverGitHub?.configured && (
+        <div className="flex items-start gap-2.5 rounded-lg border border-blue-800/40 bg-blue-950/30 px-3 py-2.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 mt-1" />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-blue-300">Server token configured</p>
+            <p className="text-[11px] text-zinc-500 mt-0.5">Leave the token blank to use the server token.</p>
+          </div>
+        </div>
+      )}
       <Field label="Personal Access Token">
         <div className="flex gap-2">
           <input type={showToken ? "text" : "password"} value={token}
@@ -398,7 +428,7 @@ function GitHubPanel({ onSaved }: { onSaved: () => void }) {
             {showToken ? "Hide" : "Show"}
           </button>
           <button type="button" onClick={handleTest}
-            disabled={testing || !token.trim()}
+            disabled={testing || (!token.trim() && !serverGitHub?.configured)}
             className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-xs text-zinc-300 hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
             {testing ? <Spinner className="w-3.5 h-3.5" /> : (
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -499,12 +529,37 @@ export default function SettingsPage() {
   const [workspaceHref, setWorkspaceHref] = useState("/");
   const [selectedId, setSelectedId] = useState<IntegrationId | null>(null);
   const [configuredMap, setConfiguredMap] = useState<Record<string, boolean>>({});
+  const [serverConfig, setServerConfig] = useState<{
+    jira?: { configured: boolean };
+    github?: { configured: boolean };
+  } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Recompute configured states on mount and after save
-  function refreshConfigured() {
+  async function refreshConfigured() {
+    let server = serverConfig;
+    try {
+      const response = await fetch(apiUrl("/api/server-config"));
+      if (response.ok) {
+        server = await response.json();
+        setServerConfig(server);
+      }
+    } catch {
+      // Keep existing server config state if fetch fails.
+    }
+
     const map: Record<string, boolean> = {};
-    INTEGRATIONS.forEach((def) => { map[def.id] = def.available ? def.isConfigured() : false; });
+    INTEGRATIONS.forEach((def) => {
+      if (!def.available) {
+        map[def.id] = false;
+        return;
+      }
+      const localConfigured = def.isConfigured();
+      const serverConfigured =
+        (def.id === "jira" && !!server?.jira?.configured) ||
+        (def.id === "github" && !!server?.github?.configured);
+      map[def.id] = localConfigured || serverConfigured;
+    });
     setConfiguredMap(map);
   }
 
@@ -558,7 +613,7 @@ export default function SettingsPage() {
             Delivery Integrations
           </h2>
           <p className="mt-1 text-xs text-zinc-600">
-            Click a card to configure. Tokens are stored in sessionStorage and never sent to the server.
+            Click a card to configure. Tokens can be provided locally for this browser session or centrally via server-side configuration.
           </p>
         </div>
 
@@ -585,6 +640,12 @@ export default function SettingsPage() {
           )}
         </div>
       </main>
+
+      <footer className="border-t border-zinc-800/60 py-4 text-center">
+        <span className="text-[11px] text-zinc-700">
+          AI Requirements Factory v{process.env.NEXT_PUBLIC_APP_VERSION ?? ""}
+        </span>
+      </footer>
     </div>
   );
 }

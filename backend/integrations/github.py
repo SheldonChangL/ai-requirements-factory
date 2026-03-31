@@ -22,6 +22,31 @@ def _github_headers(token: str) -> dict[str, str]:
     }
 
 
+def create_github_repo(
+    token: str, name: str, private: bool = False, org: str | None = None
+) -> dict[str, str]:
+    """Create a new GitHub repo. Returns {full_name, owner, name}."""
+    repo_name = name.strip().replace(" ", "-")
+    payload = {"name": repo_name, "private": private, "auto_init": True}
+    url = (
+        f"https://api.github.com/orgs/{org}/repos" if org
+        else "https://api.github.com/user/repos"
+    )
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_github_headers(token),
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = json.loads(resp.read())
+        return {
+            "full_name": body["full_name"],
+            "owner": body["owner"]["login"],
+            "name": body["name"],
+        }
+
+
 def list_github_repos(token: str) -> list[dict[str, str]]:
     url = "https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member"
     req = urllib.request.Request(url, headers=_github_headers(token))
