@@ -1135,22 +1135,22 @@ function buildMarkdownComponents(
 
 const prdMarkdownComponents = {
   h1: ({ children }: React.PropsWithChildren) => (
-    <h1 className="text-xl font-bold text-zinc-100 mb-4 pb-2 border-b border-zinc-700">{children}</h1>
+    <h1 className="text-3xl font-bold text-zinc-100 mb-6 pb-4 border-b border-zinc-700/80">{children}</h1>
   ),
   h2: ({ children }: React.PropsWithChildren) => (
-    <h2 className="text-base font-semibold text-indigo-400 mt-6 mb-2">{children}</h2>
+    <h2 className="text-xl font-semibold text-indigo-400 mt-10 mb-4">{children}</h2>
   ),
   h3: ({ children }: React.PropsWithChildren) => (
-    <h3 className="text-sm font-semibold text-zinc-300 mt-4 mb-1.5">{children}</h3>
+    <h3 className="text-lg font-semibold text-zinc-200 mt-7 mb-3">{children}</h3>
   ),
   p: ({ children }: React.PropsWithChildren) => (
-    <p className="text-sm text-zinc-300 leading-relaxed mb-2">{children}</p>
+    <p className="text-lg text-zinc-300 leading-relaxed mb-4">{children}</p>
   ),
   ul: ({ children }: React.PropsWithChildren) => (
-    <ul className="list-disc list-inside text-sm text-zinc-300 space-y-1 mb-3 pl-2">{children}</ul>
+    <ul className="list-disc list-inside text-lg text-zinc-300 space-y-2 mb-5 pl-2">{children}</ul>
   ),
   ol: ({ children }: React.PropsWithChildren) => (
-    <ol className="list-decimal list-inside text-sm text-zinc-300 space-y-1 mb-3 pl-2">{children}</ol>
+    <ol className="list-decimal list-inside text-lg text-zinc-300 space-y-2 mb-5 pl-2">{children} </ol>
   ),
   li: ({ children }: React.PropsWithChildren) => <li className="text-zinc-300">{children}</li>,
   strong: ({ children }: React.PropsWithChildren) => (
@@ -1166,7 +1166,7 @@ const prdMarkdownComponents = {
     }
     return (
       <code
-        className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs font-mono text-emerald-400"
+        className="bg-zinc-800/80 border border-zinc-700 rounded px-2 py-1 text-[14px] font-mono text-emerald-400"
         {...rest}
       >
         {children}
@@ -1174,23 +1174,23 @@ const prdMarkdownComponents = {
     );
   },
   blockquote: ({ children }: React.PropsWithChildren) => (
-    <blockquote className="border-l-2 border-indigo-500/50 pl-4 my-3 text-zinc-400 italic text-sm">
+    <blockquote className="border-l-2 border-indigo-500/50 pl-4 my-5 text-zinc-400 italic text-lg">
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="border-zinc-800 my-4" />,
+  hr: () => <hr className="border-zinc-800/60 my-8" />,
   table: ({ children }: React.PropsWithChildren) => (
-    <div className="overflow-x-auto mb-4 rounded-lg border border-zinc-700">
-      <table className="min-w-full text-sm">{children}</table>
+    <div className="overflow-x-auto mb-6 rounded-lg border border-zinc-700/80">
+      <table className="min-w-full text-lg">{children}</table>
     </div>
   ),
   th: ({ children }: React.PropsWithChildren) => (
-    <th className="bg-zinc-800/80 px-3 py-2 text-left text-xs font-semibold text-zinc-300 border-b border-zinc-700">
+    <th className="bg-zinc-800/80 px-4 py-3 text-left text-sm font-semibold text-zinc-300 border-b border-zinc-700">
       {children}
     </th>
   ),
   td: ({ children }: React.PropsWithChildren) => (
-    <td className="px-3 py-2 text-zinc-400 border-b border-zinc-800/60 text-xs">{children}</td>
+    <td className="px-4 py-3 text-zinc-400 border-b border-zinc-800/60 text-base">{children}</td>
   ),
 };
 
@@ -1201,6 +1201,7 @@ const prdMarkdownComponents = {
 export default function HomePage() {
   // ── Sidebar state ───────────────────────────────────────────────────────
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [workspaceHeaderExpanded, setWorkspaceHeaderExpanded] = useState(true);
 
   // ── Project / Session state ─────────────────────────────────────────────
   const [projects, setProjects] = useState<Project[]>([]);
@@ -2642,6 +2643,9 @@ export default function HomePage() {
       },
     ];
 
+  const [isManualZenMode, setIsManualZenMode] = useState(false);
+  const isZenMode = isEditingPrd || isEditingArch || isEditingStories || isManualZenMode;
+
   // ── Render ──────────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
@@ -2649,6 +2653,8 @@ export default function HomePage() {
       {/* ================================================================ */}
       {/* SIDEBAR                                                           */}
       {/* ================================================================ */}
+      {!isZenMode && (
+        <>
       <div
         className={`flex flex-col shrink-0 border-r border-zinc-800 bg-zinc-900 transition-all duration-200 overflow-hidden ${sidebarOpen ? "w-64" : "w-12"
           }`}
@@ -3168,18 +3174,53 @@ export default function HomePage() {
           </div>
         </div>
       </div>
+      </>
+      )}
 
       {/* ================================================================ */}
       {/* RIGHT PANE — WORKSPACE                                            */}
       {/* ================================================================ */}
-      <div className="flex flex-col flex-1 bg-zinc-900 min-w-0">
+      <div className="flex flex-col flex-1 bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 min-w-0 shadow-2xl shadow-black/50">
         <div className="relative border-b border-zinc-800 shrink-0">
           <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent" />
           <div className="px-5 py-4 space-y-4">
             <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.24em] text-zinc-500">Workspace</p>
-                <h2 className="text-base font-semibold text-zinc-100">{activeStageTitle}</h2>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceHeaderExpanded(v => !v)}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-800/50 hover:bg-zinc-700 text-zinc-400 transition-colors"
+                  aria-label={workspaceHeaderExpanded ? "Collapse header" : "Expand header"}
+                  title={workspaceHeaderExpanded ? "Collapse header" : "Expand header"}
+                >
+                  <svg className={`w-4 h-4 transition-transform duration-200 ${workspaceHeaderExpanded ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsManualZenMode(v => !v)}
+                  className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isManualZenMode ? "bg-indigo-600/80 text-white hover:bg-indigo-500" : "bg-zinc-800/50 hover:bg-zinc-700 text-zinc-400"}`}
+                  aria-label={isManualZenMode ? "Exit Full Screen" : "Enter Full Screen"}
+                  title={isManualZenMode ? "Exit Full Screen" : "Enter Full Screen"}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {isManualZenMode ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m0 0l-5-5" />
+                    )}
+                  </svg>
+                </button>
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.24em] text-zinc-500">Workspace</p>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-semibold text-zinc-100">{activeStageTitle}</h2>
+                    {!workspaceHeaderExpanded && (
+                      <span className="text-xs text-zinc-500 font-medium ml-2">· {stageLabel(activeWorkspaceStage)} Stage Metadata Hidden</span>
+                    )}
+                  </div>
+                </div>
               </div>
               {canExport && (
                 <button
@@ -3194,7 +3235,9 @@ export default function HomePage() {
               )}
             </div>
 
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            {workspaceHeaderExpanded && (
+              <>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               {stageCards.map((stage) => (
                 <button
                   key={stage.key}
@@ -3232,6 +3275,8 @@ export default function HomePage() {
               summaries={stageSummaries}
               onJump={setActiveWorkspaceStage}
             />
+              </>
+            )}
           </div>
         </div>
 
@@ -3355,7 +3400,7 @@ export default function HomePage() {
                     </div>
                   </div>
                 ) : prdDraft ? (
-                  <div className="prose prose-invert prose-sm max-w-none">
+                  <div className="prose prose-invert prose-lg max-w-4xl mx-auto">
                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
                       {prdDraft}
                     </ReactMarkdown>
@@ -3534,7 +3579,7 @@ export default function HomePage() {
                         <span>Generating a new architecture version…</span>
                       </div>
                     )}
-                    <div className="prose prose-invert prose-sm max-w-none">
+                    <div className="prose prose-invert prose-lg max-w-4xl mx-auto">
                       <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
                         {architectureDraft}
                       </ReactMarkdown>
@@ -3781,7 +3826,7 @@ export default function HomePage() {
                         )}
                       </button>
                     </div>
-                    <div className="prose prose-invert prose-sm max-w-none">
+                    <div className="prose prose-invert prose-lg max-w-4xl mx-auto">
                       <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
                         {userStoriesDraft}
                       </ReactMarkdown>
