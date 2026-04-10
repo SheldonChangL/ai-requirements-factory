@@ -180,25 +180,25 @@ const MODEL_OPTIONS: {
   color: string;
   dot: string;
 }[] = [
-  { value: "ollama",     label: "Ollama (llama3)", color: "text-emerald-400", dot: "bg-emerald-400" },
-  { value: "gemini-cli", label: "Gemini CLI",      color: "text-blue-400",    dot: "bg-blue-400"    },
-  { value: "claude-cli", label: "Claude CLI",      color: "text-purple-400",  dot: "bg-purple-400"  },
-  { value: "codex-cli",  label: "Codex CLI",       color: "text-amber-400",   dot: "bg-amber-400"   },
-];
+    { value: "ollama", label: "Ollama (gemma4:e4b)", color: "text-emerald-400", dot: "bg-emerald-400" },
+    { value: "gemini-cli", label: "Gemini CLI", color: "text-blue-400", dot: "bg-blue-400" },
+    { value: "claude-cli", label: "Claude CLI", color: "text-purple-400", dot: "bg-purple-400" },
+    { value: "codex-cli", label: "Codex CLI", color: "text-amber-400", dot: "bg-amber-400" },
+  ];
 
 const FILE_ICON: Record<string, string> = {
   pdf: "📄", docx: "📝", xlsx: "📊", xls: "📊", md: "📋",
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
-  Security:         "bg-red-950/80 text-red-300 border-red-700/60",
-  Performance:      "bg-amber-950/80 text-amber-300 border-amber-700/60",
-  Scalability:      "bg-blue-950/80 text-blue-300 border-blue-700/60",
-  Availability:     "bg-emerald-950/80 text-emerald-300 border-emerald-700/60",
-  Reliability:      "bg-emerald-950/80 text-emerald-300 border-emerald-700/60",
-  Compliance:       "bg-violet-950/80 text-violet-300 border-violet-700/60",
+  Security: "bg-red-950/80 text-red-300 border-red-700/60",
+  Performance: "bg-amber-950/80 text-amber-300 border-amber-700/60",
+  Scalability: "bg-blue-950/80 text-blue-300 border-blue-700/60",
+  Availability: "bg-emerald-950/80 text-emerald-300 border-emerald-700/60",
+  Reliability: "bg-emerald-950/80 text-emerald-300 border-emerald-700/60",
+  Compliance: "bg-violet-950/80 text-violet-300 border-violet-700/60",
   "Data Retention": "bg-violet-950/80 text-violet-300 border-violet-700/60",
-  Functional:       "bg-indigo-950/80 text-indigo-300 border-indigo-700/60",
+  Functional: "bg-indigo-950/80 text-indigo-300 border-indigo-700/60",
 };
 
 // ---------------------------------------------------------------------------
@@ -332,8 +332,8 @@ function buildLineDiffRows(currentContent: string, proposedContent: string): Rev
           leftText && rightText
             ? "changed"
             : leftText
-            ? "removed"
-            : "added",
+              ? "removed"
+              : "added",
         leftLineNumber: leftText ? currentLineNumber : null,
         leftText,
         rightLineNumber: rightText ? proposedLineNumber : null,
@@ -348,11 +348,19 @@ function buildLineDiffRows(currentContent: string, proposedContent: string): Rev
 }
 function apiUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  if (!API_BASE) return normalizedPath;
-  if (API_BASE.endsWith("/api") && normalizedPath.startsWith("/api/")) {
-    return `${API_BASE}${normalizedPath.slice(4)}`;
+  const isBrowser = typeof window !== "undefined";
+  const isLocalBrowser =
+    isBrowser &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  const effectiveApiBase =
+    isLocalBrowser && (API_BASE === "/api" || API_BASE === "")
+      ? `${window.location.protocol}//${window.location.hostname}:8000`
+      : API_BASE;
+  if (!effectiveApiBase) return normalizedPath;
+  if (effectiveApiBase.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${effectiveApiBase}${normalizedPath.slice(4)}`;
   }
-  return `${API_BASE}${normalizedPath}`;
+  return `${effectiveApiBase}${normalizedPath}`;
 }
 async function fetchProjectsFromApi(): Promise<Project[]> {
   const res = await fetch(apiUrl("/api/projects"));
@@ -475,8 +483,8 @@ function Mermaid({ chart }: { chart: string }) {
 type AccentColor = "indigo" | "emerald";
 
 const ACCENT_STYLES: Record<AccentColor, { border: string; ring: string; btn: string; dot: string }> = {
-  indigo:  { border: "focus:border-indigo-500  focus:ring-indigo-500/40",  ring: "ring-indigo-500/30",  btn: "from-indigo-600 to-violet-600",  dot: "bg-indigo-400" },
-  emerald: { border: "focus:border-emerald-500 focus:ring-emerald-500/40", ring: "ring-emerald-500/30", btn: "from-emerald-600 to-teal-600",    dot: "bg-emerald-400" },
+  indigo: { border: "focus:border-indigo-500  focus:ring-indigo-500/40", ring: "ring-indigo-500/30", btn: "from-indigo-600 to-violet-600", dot: "bg-indigo-400" },
+  emerald: { border: "focus:border-emerald-500 focus:ring-emerald-500/40", ring: "ring-emerald-500/30", btn: "from-emerald-600 to-teal-600", dot: "bg-emerald-400" },
 };
 
 function StageChatPanel({
@@ -535,11 +543,10 @@ function StageChatPanel({
                   </svg>
                 </div>
               )}
-              <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
-                m.role === "user"
+              <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${m.role === "user"
                   ? "bg-zinc-800 text-zinc-200"
                   : "bg-zinc-900 border border-zinc-800 text-zinc-300"
-              }`}>
+                }`}>
                 {m.content}
               </div>
             </div>
@@ -660,11 +667,10 @@ function ReviewDiffModal({
               {pendingReview.rows.map((row, index) => (
                 <div
                   key={`left-${index}`}
-                  className={`grid grid-cols-[56px_1fr] gap-0 border-b border-zinc-900/80 font-mono text-xs ${
-                    row.kind === "removed" || row.kind === "changed"
+                  className={`grid grid-cols-[56px_1fr] gap-0 border-b border-zinc-900/80 font-mono text-xs ${row.kind === "removed" || row.kind === "changed"
                       ? "bg-red-950/20"
                       : "bg-zinc-950/30"
-                  }`}
+                    }`}
                 >
                   <div className="border-r border-zinc-800 px-3 py-2 text-right text-zinc-600">
                     {row.leftLineNumber ?? ""}
@@ -685,11 +691,10 @@ function ReviewDiffModal({
               {pendingReview.rows.map((row, index) => (
                 <div
                   key={`right-${index}`}
-                  className={`grid grid-cols-[56px_1fr] gap-0 border-b border-zinc-900/80 font-mono text-xs ${
-                    row.kind === "added" || row.kind === "changed"
+                  className={`grid grid-cols-[56px_1fr] gap-0 border-b border-zinc-900/80 font-mono text-xs ${row.kind === "added" || row.kind === "changed"
                       ? "bg-emerald-950/20"
                       : "bg-zinc-950/30"
-                  }`}
+                    }`}
                 >
                   <div className="border-r border-zinc-800 px-3 py-2 text-right text-zinc-600">
                     {row.rightLineNumber ?? ""}
@@ -767,11 +772,10 @@ function StageSummaryPanel({
                 <button
                   type="button"
                   onClick={() => onJump(stage)}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-                    stage === currentStage
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${stage === currentStage
                       ? "border-zinc-500 bg-zinc-800 text-zinc-100"
                       : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
-                  }`}
+                    }`}
                 >
                   {stageLabel(stage)}
                 </button>
@@ -919,11 +923,10 @@ function StageReviewNotesPanel({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-                  <span className={`rounded-full border px-2 py-0.5 ${
-                    comment.status === "open"
+                  <span className={`rounded-full border px-2 py-0.5 ${comment.status === "open"
                       ? "border-amber-700/50 bg-amber-950/40 text-amber-300"
                       : "border-emerald-700/50 bg-emerald-950/40 text-emerald-300"
-                  }`}>
+                    }`}>
                     {comment.status === "open" ? "Open" : "Resolved"}
                   </span>
                   <span>{new Date(comment.created_at * 1000).toLocaleString()}</span>
@@ -965,11 +968,10 @@ function StageRevisionLog({
               <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-zinc-300">
                 {formatRevisionSource(revision.source)}
               </span>
-              <span className={`rounded-full border px-2 py-0.5 ${
-                revision.reviewed
+              <span className={`rounded-full border px-2 py-0.5 ${revision.reviewed
                   ? "border-emerald-700/50 bg-emerald-950/40 text-emerald-300"
                   : "border-zinc-700 bg-zinc-900 text-zinc-400"
-              }`}>
+                }`}>
                 {revision.reviewed ? "Reviewed" : "Direct apply"}
               </span>
               <span>{new Date(revision.created_at * 1000).toLocaleString()}</span>
@@ -1201,83 +1203,87 @@ export default function HomePage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // ── Project / Session state ─────────────────────────────────────────────
-  const [projects, setProjects]             = useState<Project[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [isHydrating, setIsHydrating]       = useState(false);
-  const [deletingId, setDeletingId]         = useState<string | null>(null);
+  const [isHydrating, setIsHydrating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isCreateProjectFormOpen, setIsCreateProjectFormOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
 
   // ── Chat state ──────────────────────────────────────────────────────────
-  const [messages, setMessages]           = useState<Message[]>([]);
-  const [userInput, setUserInput]         = useState("");
-  const [modelChoice, setModelChoice]     = useState<ModelChoice>("ollama");
-  const [isLoading, setIsLoading]         = useState(false);
-  const [isUploading, setIsUploading]     = useState(false);
-  const [prdDraft, setPrdDraft]           = useState("");
-  const [isReady, setIsReady]             = useState(false);
-  const [error, setError]                 = useState<string | null>(null);
-  const [uploadError, setUploadError]     = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [userInput, setUserInput] = useState("");
+  const [modelChoice, setModelChoice] = useState<ModelChoice>("ollama");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [prdDraft, setPrdDraft] = useState("");
+  const [isReady, setIsReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [activeWorkspaceStage, setActiveWorkspaceStage] = useState<WorkspaceStage>("prd");
-  const [isEditingPrd, setIsEditingPrd]   = useState(false);
+  const [isEditingPrd, setIsEditingPrd] = useState(false);
   const [editingPrdContent, setEditingPrdContent] = useState("");
-  const [isSavingPrd, setIsSavingPrd]     = useState(false);
+  const [isSavingPrd, setIsSavingPrd] = useState(false);
   const [prdInstruction, setPrdInstruction] = useState("");
   const [isRefiningPrd, setIsRefiningPrd] = useState(false);
 
   // ── Architecture state ───────────────────────────────────────────────────
   const [architectureDraft, setArchitectureDraft] = useState("");
-  const [isGeneratingArch, setIsGeneratingArch]   = useState(false);
-  const [isEditingArch, setIsEditingArch]         = useState(false);
+  const [isGeneratingArch, setIsGeneratingArch] = useState(false);
+  const [isEditingArch, setIsEditingArch] = useState(false);
   const [editingArchContent, setEditingArchContent] = useState("");
-  const [isSavingArch, setIsSavingArch]           = useState(false);
+  const [isSavingArch, setIsSavingArch] = useState(false);
   // ── User Stories state ───────────────────────────────────────────────────
-  const [userStoriesDraft, setUserStoriesDraft]       = useState("");
+  const [userStoriesDraft, setUserStoriesDraft] = useState("");
   const [isGeneratingStories, setIsGeneratingStories] = useState(false);
-  const [isEditingStories, setIsEditingStories]       = useState(false);
+  const [isEditingStories, setIsEditingStories] = useState(false);
   const [editingStoriesContent, setEditingStoriesContent] = useState("");
-  const [isSavingStories, setIsSavingStories]         = useState(false);
+  const [isSavingStories, setIsSavingStories] = useState(false);
 
   // ── Stage chat state ──────────────────────────────────────────────────────
-  const [archChatMessages, setArchChatMessages]     = useState<{role:string;content:string}[]>([]);
-  const [archChatInput, setArchChatInput]           = useState("");
-  const [isSendingArchChat, setIsSendingArchChat]   = useState(false);
-  const [storiesChatMessages, setStoriesChatMessages] = useState<{role:string;content:string}[]>([]);
-  const [storiesChatInput, setStoriesChatInput]     = useState("");
+  const [archChatMessages, setArchChatMessages] = useState<{ role: string; content: string }[]>([]);
+  const [archChatInput, setArchChatInput] = useState("");
+  const [isSendingArchChat, setIsSendingArchChat] = useState(false);
+  const [storiesChatMessages, setStoriesChatMessages] = useState<{ role: string; content: string }[]>([]);
+  const [storiesChatInput, setStoriesChatInput] = useState("");
   const [isSendingStoriesChat, setIsSendingStoriesChat] = useState(false);
 
   // ── Delivery state ────────────────────────────────────────────────────────
-  const [jiraConfig, setJiraConfig]               = useState<JiraConfig>({ domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" });
-  const [jiraToken, setJiraToken]                 = useState("");
-  const [githubConfig, setGitHubConfig]           = useState<GitHubConfig>({ owner: "", repo: "" });
-  const [githubToken, setGitHubToken]             = useState("");
-  const [serverConfig, setServerConfig]           = useState<{
+  const [jiraConfig, setJiraConfig] = useState<JiraConfig>({ domain: DEFAULT_JIRA_DOMAIN, email: "", projectKey: "" });
+  const [jiraToken, setJiraToken] = useState("");
+  const [githubConfig, setGitHubConfig] = useState<GitHubConfig>({ owner: "", repo: "" });
+  const [githubToken, setGitHubToken] = useState("");
+  const [serverConfig, setServerConfig] = useState<{
     jira?: { configured: boolean; domain: string | null };
     github?: { configured: boolean };
   } | null>(null);
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
-  const [deliveryTarget, setDeliveryTarget]       = useState<DeliveryTarget>("jira");
+  const [deliveryTarget, setDeliveryTarget] = useState<DeliveryTarget>("jira");
   const [isPublishingDelivery, setIsPublishingDelivery] = useState(false);
   const [deliveryPushResult, setDeliveryPushResult] = useState<DeliveryPushResult | null>(null);
-  const [deliveryErrorMsg, setDeliveryErrorMsg]   = useState<string | null>(null);
-  const [jiraProjects, setJiraProjects]           = useState<{ key: string; name: string; id: string }[]>([]);
+  const [deliveryErrorMsg, setDeliveryErrorMsg] = useState<string | null>(null);
+  const [jiraProjects, setJiraProjects] = useState<{ key: string; name: string; id: string }[]>([]);
   const [selectedJiraProjectKey, setSelectedJiraProjectKey] = useState("");
   const [isLoadingJiraProjects, setIsLoadingJiraProjects] = useState(false);
   const [jiraProjectsFetchFailed, setJiraProjectsFetchFailed] = useState(false);
-  const [githubRepos, setGithubRepos]             = useState<{ full_name: string; owner: string; name: string }[]>([]);
+  const [githubRepos, setGithubRepos] = useState<{ full_name: string; owner: string; name: string }[]>([]);
   const [selectedGithubRepo, setSelectedGithubRepo] = useState("");
   const [isLoadingGithubRepos, setIsLoadingGithubRepos] = useState(false);
   const [githubReposFetchFailed, setGithubReposFetchFailed] = useState(false);
   // ── Stage status ─────────────────────────────────────────────────────────
-  const [prdStatus, setPrdStatus]         = useState<StageStatus>("draft");
-  const [archStatus, setArchStatus]       = useState<StageStatus>("draft");
+  const [prdStatus, setPrdStatus] = useState<StageStatus>("draft");
+  const [archStatus, setArchStatus] = useState<StageStatus>("draft");
   const [storiesStatus, setStoriesStatus] = useState<StageStatus>("draft");
 
-  const [showPrdHistory, setShowPrdHistory]         = useState(false);
-  const [showArchHistory, setShowArchHistory]       = useState(false);
+  const [showPrdHistory, setShowPrdHistory] = useState(false);
+  const [showArchHistory, setShowArchHistory] = useState(false);
   const [showStoriesHistory, setShowStoriesHistory] = useState(false);
-  const [prdEvents, setPrdEvents]                   = useState<StageEvent[]>([]);
-  const [archEvents, setArchEvents]                 = useState<StageEvent[]>([]);
-  const [storiesEvents, setStoriesEvents]           = useState<StageEvent[]>([]);
+  const [prdEvents, setPrdEvents] = useState<StageEvent[]>([]);
+  const [archEvents, setArchEvents] = useState<StageEvent[]>([]);
+  const [storiesEvents, setStoriesEvents] = useState<StageEvent[]>([]);
   const [stageSummaries, setStageSummaries] = useState<Record<WorkspaceStage, StageSummary>>({
     prd: {
       stage: "prd",
@@ -1331,43 +1337,52 @@ export default function HomePage() {
   const [submittingCommentStage, setSubmittingCommentStage] = useState<WorkspaceStage | null>(null);
 
   // delivery modal step: "configure" → pick target/project, "preview" → review items
-  const [deliveryStep, setDeliveryStep]           = useState<"configure" | "preview">("configure");
-  const [deliveryPreviewItems, setDeliveryPreviewItems] = useState<{ title: string; group: string; labels: string[]; estimate: number }[]>([]);
+  const [deliveryStep, setDeliveryStep] = useState<"configure" | "preview">("configure");
+  const [deliveryPreviewItems, setDeliveryPreviewItems] = useState<{
+    title: string;
+    group: string;
+    labels: string[];
+    estimate: number;
+    senior_rd_days?: number;
+    requirement_refs?: string[];
+    requirement_source?: string;
+  }[]>([]);
   // editable labels per item index: Map<itemIndex, string[]>
   const [editableLabels, setEditableLabels] = useState<Map<number, string[]>>(new Map());
   // per-item delivery target: Map<itemIndex, projectKey | "owner/repo">
   const [itemTargets, setItemTargets] = useState<Map<number, string>>(new Map());
   // "create new" inline form state for delivery modal
-  const [showCreateNew, setShowCreateNew]   = useState(false);
-  const [createNewName, setCreateNewName]   = useState("");
-  const [createNewKey, setCreateNewKey]     = useState("");  // Jira only
+  const [showCreateNew, setShowCreateNew] = useState(false);
+  const [createNewName, setCreateNewName] = useState("");
+  const [createNewKey, setCreateNewKey] = useState("");  // Jira only
   const [createNewPrivate, setCreateNewPrivate] = useState(false);  // GitHub only
-  const [isCreatingNew, setIsCreatingNew]   = useState(false);
+  const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [createNewError, setCreateNewError] = useState<string | null>(null);
 
   const hasServerJiraConfig = !!serverConfig?.jira?.configured;
   const hasServerGitHubConfig = !!serverConfig?.github?.configured;
   const jiraConfigAvailable = isJiraConfigured() || hasServerJiraConfig;
   const githubConfigAvailable = isGitHubConfigured() || hasServerGitHubConfig;
-  const [isLoadingPreview, setIsLoadingPreview]   = useState(false);
-  const [pendingReview, setPendingReview]         = useState<PendingReview | null>(null);
-  const [isApplyingReview, setIsApplyingReview]   = useState(false);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
+  const [isApplyingReview, setIsApplyingReview] = useState(false);
 
   // ── Amendment Mode banner ─────────────────────────────────────────────────
   const [amendmentBannerDismissed, setAmendmentBannerDismissed] = useState(false);
 
   // ── Export / Reset state ─────────────────────────────────────────────────
-  const [isExporting, setIsExporting]   = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [isResettingPrd, setIsResettingPrd] = useState(false);
 
   // ── Model availability state ─────────────────────────────────────────────
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [checkingModels, setCheckingModels]   = useState(true);
+  const [checkingModels, setCheckingModels] = useState(true);
   const [modelCheckError, setModelCheckError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef    = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef   = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const createProjectInputRef = useRef<HTMLInputElement>(null);
 
   // ── Check model availability on mount ───────────────────────────────────
   useEffect(() => {
@@ -1397,6 +1412,12 @@ export default function HomePage() {
       })
       .finally(() => setCheckingModels(false));
   }, []);
+
+  useEffect(() => {
+    if (sidebarOpen && isCreateProjectFormOpen) {
+      createProjectInputRef.current?.focus();
+    }
+  }, [sidebarOpen, isCreateProjectFormOpen]);
 
   // ── Load projects + integration config on mount ──────────────────────────
   useEffect(() => {
@@ -1445,7 +1466,7 @@ export default function HomePage() {
     fetch(apiUrl("/api/server-config"))
       .then((r) => r.json())
       .then((data) => setServerConfig(data))
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // ── Hydrate chat state whenever active thread changes ───────────────────
@@ -1634,9 +1655,28 @@ export default function HomePage() {
   }, []);
 
   // ── Project management ──────────────────────────────────────────────────
-  const createProject = async () => {
-    const name = window.prompt("Project name:")?.trim();
-    if (!name) return;
+  const openCreateProjectForm = () => {
+    setSidebarOpen(true);
+    setIsCreateProjectFormOpen(true);
+    setCreateProjectError(null);
+  };
+
+  const closeCreateProjectForm = () => {
+    setIsCreateProjectFormOpen(false);
+    setNewProjectName("");
+    setCreateProjectError(null);
+  };
+
+  const createProject = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = newProjectName.trim();
+    if (!name) {
+      setCreateProjectError("Project name is required.");
+      return;
+    }
+
+    setIsCreatingProject(true);
+    setCreateProjectError(null);
     try {
       const newProject = await createProjectInApi(name);
       const updated = [...projects, newProject];
@@ -1644,8 +1684,13 @@ export default function HomePage() {
       setActiveThreadId(newProject.id);
       saveActiveProjectId(newProject.id);
       syncProjectInCurrentUrl(newProject.id);
+      setNewProjectName("");
+      setIsCreateProjectFormOpen(false);
+      setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create project");
+      setCreateProjectError(e instanceof Error ? e.message : "Failed to create project");
+    } finally {
+      setIsCreatingProject(false);
     }
   };
 
@@ -2083,9 +2128,9 @@ export default function HomePage() {
   // ── Stage chat send ──────────────────────────────────────────────────────
   const handleStageChatSend = async (stage: "architecture" | "stories") => {
     if (!activeThreadId) return;
-    const input    = stage === "architecture" ? archChatInput    : storiesChatInput;
+    const input = stage === "architecture" ? archChatInput : storiesChatInput;
     const setInput = stage === "architecture" ? setArchChatInput : setStoriesChatInput;
-    const setMsgs  = stage === "architecture" ? setArchChatMessages : setStoriesChatMessages;
+    const setMsgs = stage === "architecture" ? setArchChatMessages : setStoriesChatMessages;
     const setSending = stage === "architecture" ? setIsSendingArchChat : setIsSendingStoriesChat;
 
     if (!input.trim()) return;
@@ -2313,7 +2358,7 @@ export default function HomePage() {
         body.jira_project_key = selectedJiraProjectKey;
       } else {
         body.github_owner = selectedGithubRepo.split("/")[0] ?? "";
-        body.github_repo  = selectedGithubRepo.split("/")[1] ?? "";
+        body.github_repo = selectedGithubRepo.split("/")[1] ?? "";
       }
       const res = await fetch(apiUrl("/api/delivery/preview"), {
         method: "POST",
@@ -2379,6 +2424,39 @@ export default function HomePage() {
       setDeliveryErrorMsg(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setIsPublishingDelivery(false);
+    }
+  };
+
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+
+  const formatSeniorRdDays = (days?: number) => {
+    if (typeof days !== "number" || Number.isNaN(days)) return "1.5d";
+    const normalized = Number.isInteger(days) ? `${days}` : `${days}`;
+    return `${normalized}d senior RD`;
+  };
+
+  const handleDownloadExcel = async () => {
+    if (!activeThreadId) return;
+    setIsExportingExcel(true);
+    try {
+      const url = apiUrl(`/api/delivery/export/excel/${activeThreadId}?model_choice=${modelChoice}`);
+      const res = await fetch(url);
+      if (!res.ok) {
+        await throwApiError(res);
+      }
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.setAttribute("download", `delivery_plan_${activeThreadId.slice(0, 8)}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "Excel export failed");
+    } finally {
+      setIsExportingExcel(false);
     }
   };
 
@@ -2473,7 +2551,10 @@ export default function HomePage() {
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); sendMessage(); };
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (e.key === "Enter" && e.metaKey) {
+      e.preventDefault();
+      sendMessage();
+    }
   };
 
   // ── File upload ─────────────────────────────────────────────────────────
@@ -2532,34 +2613,34 @@ export default function HomePage() {
     ready: boolean;
     accent: string;
   }[] = [
-    {
-      key: "prd",
-      title: "PRD",
-      subtitle: stageSummaries.prd.open_comments > 0
-        ? `${stageSummaries.prd.open_comments} open review note${stageSummaries.prd.open_comments === 1 ? "" : "s"}`
-        : isReady ? "Ready for downstream work" : prdDraft ? "Draft in progress" : "Waiting for requirements",
-      ready: !!prdDraft,
-      accent: "from-amber-500 to-orange-500",
-    },
-    {
-      key: "architecture",
-      title: "Architecture",
-      subtitle: stageSummaries.architecture.stale
-        ? "Needs refresh after upstream change"
-        : architectureDraft ? "Technical design ready" : isReady ? "Ready to generate" : "Blocked by PRD",
-      ready: !!architectureDraft,
-      accent: "from-indigo-500 to-violet-500",
-    },
-    {
-      key: "stories",
-      title: "User Stories",
-      subtitle: stageSummaries.stories.stale
-        ? "Needs refresh after upstream change"
-        : userStoriesDraft ? "Delivery planning ready" : architectureDraft ? "Ready to generate" : "Blocked by architecture",
-      ready: !!userStoriesDraft,
-      accent: "from-emerald-500 to-teal-500",
-    },
-  ];
+      {
+        key: "prd",
+        title: "PRD",
+        subtitle: stageSummaries.prd.open_comments > 0
+          ? `${stageSummaries.prd.open_comments} open review note${stageSummaries.prd.open_comments === 1 ? "" : "s"}`
+          : isReady ? "Ready for downstream work" : prdDraft ? "Draft in progress" : "Waiting for requirements",
+        ready: !!prdDraft,
+        accent: "from-amber-500 to-orange-500",
+      },
+      {
+        key: "architecture",
+        title: "Architecture",
+        subtitle: stageSummaries.architecture.stale
+          ? "Needs refresh after upstream change"
+          : architectureDraft ? "Technical design ready" : isReady ? "Ready to generate" : "Blocked by PRD",
+        ready: !!architectureDraft,
+        accent: "from-indigo-500 to-violet-500",
+      },
+      {
+        key: "stories",
+        title: "User Stories",
+        subtitle: stageSummaries.stories.stale
+          ? "Needs refresh after upstream change"
+          : userStoriesDraft ? "Delivery planning ready" : architectureDraft ? "Ready to generate" : "Blocked by architecture",
+        ready: !!userStoriesDraft,
+        accent: "from-emerald-500 to-teal-500",
+      },
+    ];
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
@@ -2569,9 +2650,8 @@ export default function HomePage() {
       {/* SIDEBAR                                                           */}
       {/* ================================================================ */}
       <div
-        className={`flex flex-col shrink-0 border-r border-zinc-800 bg-zinc-900 transition-all duration-200 overflow-hidden ${
-          sidebarOpen ? "w-64" : "w-12"
-        }`}
+        className={`flex flex-col shrink-0 border-r border-zinc-800 bg-zinc-900 transition-all duration-200 overflow-hidden ${sidebarOpen ? "w-64" : "w-12"
+          }`}
       >
         {/* Sidebar top bar */}
         <div className={`flex items-center border-b border-zinc-800 shrink-0 ${sidebarOpen ? "px-4 py-4" : "px-0 py-3 justify-center"}`}>
@@ -2609,7 +2689,8 @@ export default function HomePage() {
         {/* New Project button */}
         <div className={`shrink-0 border-b border-zinc-800 ${sidebarOpen ? "px-4 py-3" : "px-2 py-3"}`}>
           {sidebarOpen ? (
-            <button onClick={createProject}
+            <button onClick={openCreateProjectForm}
+              data-testid="open-create-project"
               className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors shadow-md shadow-indigo-900/30">
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -2617,12 +2698,64 @@ export default function HomePage() {
               New Project
             </button>
           ) : (
-            <button onClick={createProject} title="New Project"
+            <button onClick={openCreateProjectForm} title="New Project"
+              data-testid="open-create-project"
               className="w-8 h-8 mx-auto flex items-center justify-center rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-md shadow-indigo-900/30">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
             </button>
+          )}
+
+          {sidebarOpen && isCreateProjectFormOpen && (
+            <form
+              onSubmit={createProject}
+              className="mt-3 rounded-xl border border-zinc-800 bg-zinc-900/80 p-3"
+              data-testid="create-project-form"
+            >
+              <label htmlFor="new-project-name" className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                Project name
+              </label>
+              <input
+                ref={createProjectInputRef}
+                id="new-project-name"
+                name="new-project-name"
+                value={newProjectName}
+                onChange={(event) => {
+                  setNewProjectName(event.target.value);
+                  if (createProjectError) setCreateProjectError(null);
+                }}
+                placeholder="Alpha rollout"
+                autoComplete="off"
+                className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                aria-label="Project name"
+                data-testid="create-project-name-input"
+              />
+              {createProjectError && (
+                <p className="mt-2 text-xs text-red-300" data-testid="create-project-error">
+                  {createProjectError}
+                </p>
+              )}
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={isCreatingProject}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                  data-testid="submit-create-project"
+                >
+                  {isCreatingProject ? <Spinner className="w-3.5 h-3.5" /> : null}
+                  {isCreatingProject ? "Creating…" : "Create project"}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeCreateProjectForm}
+                  disabled={isCreatingProject}
+                  className="inline-flex items-center justify-center rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
           )}
         </div>
 
@@ -2651,31 +2784,26 @@ export default function HomePage() {
                 key={project.id}
                 onClick={() => selectProject(project.id)}
                 title={!sidebarOpen ? project.name : undefined}
-                className={`w-full text-left flex items-center cursor-pointer transition-colors group ${
-                  sidebarOpen ? "gap-2.5 px-3 py-2" : "justify-center py-2"
-                } ${
-                  isActive
+                className={`w-full text-left flex items-center cursor-pointer transition-colors group ${sidebarOpen ? "gap-2.5 px-3 py-2" : "justify-center py-2"
+                  } ${isActive
                     ? "bg-zinc-800 border-l-2 border-indigo-400"
                     : "border-l-2 border-transparent hover:bg-zinc-800/50"
-                }`}
+                  }`}
               >
                 {/* Avatar */}
-                <div className={`rounded-md flex items-center justify-center shrink-0 text-xs font-bold text-white shadow-sm ${
-                  sidebarOpen ? "w-6 h-6" : "w-7 h-7"
-                } ${
-                  isActive
+                <div className={`rounded-md flex items-center justify-center shrink-0 text-xs font-bold text-white shadow-sm ${sidebarOpen ? "w-6 h-6" : "w-7 h-7"
+                  } ${isActive
                     ? "bg-gradient-to-br from-indigo-500 to-violet-600 shadow-indigo-900/40"
                     : "bg-zinc-700 group-hover:bg-zinc-600"
-                }`}>
+                  }`}>
                   {isDeleting ? <Spinner className="w-3 h-3" /> : initial}
                 </div>
 
                 {/* Name + delete button — only in expanded mode */}
                 {sidebarOpen && (
                   <>
-                    <span className={`text-sm truncate flex-1 ${
-                      isActive ? "text-zinc-100 font-medium" : "text-zinc-400 group-hover:text-zinc-200"
-                    }`}>
+                    <span className={`text-sm truncate flex-1 ${isActive ? "text-zinc-100 font-medium" : "text-zinc-400 group-hover:text-zinc-200"
+                      }`}>
                       {project.name}
                     </span>
 
@@ -2828,7 +2956,7 @@ export default function HomePage() {
                 </svg>
               </div>
               <div>
-                <p className="text-zinc-400 font-medium text-sm">No project selected</p>
+                <p className="text-zinc-400 font-medium text-sm" data-testid="empty-project-state">No project selected</p>
                 <p className="text-zinc-600 text-xs mt-1">Create a new project from the sidebar to get started.</p>
               </div>
             </div>
@@ -2907,11 +3035,10 @@ export default function HomePage() {
                   </div>
                 )}
 
-                <div className={`rounded-2xl px-4 py-3 text-sm leading-relaxed max-w-full overflow-x-hidden ${
-                  msg.role === "user"
+                <div className={`rounded-2xl px-4 py-3 text-sm leading-relaxed max-w-full overflow-x-hidden ${msg.role === "user"
                     ? "bg-indigo-600 text-white rounded-br-sm shadow-md shadow-indigo-900/30"
                     : "bg-zinc-800 text-zinc-100 rounded-bl-sm border border-zinc-700/50"
-                }`}>
+                  }`}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents as never}>
                     {msg.content}
                   </ReactMarkdown>
@@ -3013,8 +3140,8 @@ export default function HomePage() {
                 !activeThreadId
                   ? "Select or create a project first…"
                   : attachedFiles.length > 0
-                  ? "Add a message about the attached files… (optional)"
-                  : "Describe your requirements… (Enter to send, Shift+Enter for newline)"
+                    ? "Add a message about the attached files… (optional)"
+                    : "Describe your requirements… (Command+Enter to send, Enter for newline)"
               }
               disabled={isLoading || !activeThreadId}
               rows={1}
@@ -3073,11 +3200,10 @@ export default function HomePage() {
                   key={stage.key}
                   type="button"
                   onClick={() => setActiveWorkspaceStage(stage.key)}
-                  className={`rounded-2xl border px-4 py-2.5 text-left transition-all ${
-                    activeWorkspaceStage === stage.key
+                  className={`rounded-2xl border px-4 py-2.5 text-left transition-all ${activeWorkspaceStage === stage.key
                       ? "border-zinc-500 bg-zinc-800/90 shadow-lg shadow-black/20"
                       : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-700 hover:bg-zinc-800/60"
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -3179,14 +3305,14 @@ export default function HomePage() {
                       <h4 className="text-sm font-semibold text-zinc-100">AI Revision</h4>
                       <p className="mt-1 text-xs text-zinc-500">Ask AI to revise only the PRD. Example: add audit log requirements, remove offline mode, split admin roles.</p>
                     </div>
-                      <button
-                        type="button"
-                        onClick={handleRefinePrd}
-                        disabled={isRefiningPrd || !prdInstruction.trim()}
-                        className="rounded-lg bg-gradient-to-r from-amber-600 to-orange-500 px-4 py-2 text-xs font-semibold text-white transition-all disabled:cursor-not-allowed disabled:from-zinc-700 disabled:to-zinc-700"
-                      >
+                    <button
+                      type="button"
+                      onClick={handleRefinePrd}
+                      disabled={isRefiningPrd || !prdInstruction.trim()}
+                      className="rounded-lg bg-gradient-to-r from-amber-600 to-orange-500 px-4 py-2 text-xs font-semibold text-white transition-all disabled:cursor-not-allowed disabled:from-zinc-700 disabled:to-zinc-700"
+                    >
                       {isRefiningPrd ? "Preparing…" : "Preview PRD Revision"}
-                      </button>
+                    </button>
                   </div>
                   <textarea
                     value={prdInstruction}
@@ -3637,8 +3763,24 @@ export default function HomePage() {
                       >
                         {isPublishingDelivery && deliveryTarget === "github" ? "Publishing…" : "Create GitHub Issues"}
                       </button>
+                      <button
+                        type="button"
+                        onClick={handleDownloadExcel}
+                        disabled={isExportingExcel}
+                        className="rounded-lg border border-emerald-700/60 bg-emerald-900/50 px-3 py-2 text-xs font-semibold text-emerald-300 transition-colors hover:border-emerald-500/70 hover:bg-emerald-800/60 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {isExportingExcel ? (
+                          <><Spinner className="w-3 h-3" />Exporting…</>
+                        ) : (
+                          <>
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Download Excel Plan
+                          </>
+                        )}
+                      </button>
                     </div>
-
                     <div className="prose prose-invert prose-sm max-w-none">
                       <ReactMarkdown remarkPlugins={[remarkGfm]} components={prdMarkdownComponents as never}>
                         {userStoriesDraft}
@@ -3764,9 +3906,18 @@ export default function HomePage() {
                               {item.group}
                             </span>
                           )}
-                          <span className="rounded-full bg-zinc-800 border border-zinc-700 px-2 py-0.5 text-[10px] text-zinc-400">
-                            {item.estimate} pts
+                          <span className="rounded-full bg-emerald-950/60 border border-emerald-800/40 px-2 py-0.5 text-[10px] text-emerald-300">
+                            {formatSeniorRdDays(item.senior_rd_days)}
                           </span>
+                          {item.requirement_refs && item.requirement_refs.length > 0 ? (
+                            <span className="rounded-full bg-amber-950/60 border border-amber-800/40 px-2 py-0.5 text-[10px] text-amber-300">
+                              {item.requirement_refs.join(", ")}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-red-950/60 border border-red-800/40 px-2 py-0.5 text-[10px] text-red-300">
+                              Requirement IDs: unmapped
+                            </span>
+                          )}
                           {(editableLabels.get(i) ?? item.labels).map((l) => (
                             <button
                               key={l}
@@ -3792,11 +3943,11 @@ export default function HomePage() {
                           >
                             {deliveryTarget === "jira"
                               ? jiraProjects.map((p) => (
-                                  <option key={p.key} value={p.key}>{p.name} ({p.key})</option>
-                                ))
+                                <option key={p.key} value={p.key}>{p.name} ({p.key})</option>
+                              ))
                               : githubRepos.map((r) => (
-                                  <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
-                                ))
+                                <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+                              ))
                             }
                           </select>
                         </div>
@@ -3842,437 +3993,437 @@ export default function HomePage() {
                 </div>
               </>
             ) : (
-            <>
-            <div className="px-5 py-4 space-y-4">
-              {/* Target selector */}
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setDeliveryTarget("jira");
-                    setDeliveryErrorMsg(null);
-                    // Auto-fetch projects if not loaded yet
-                    if (jiraProjects.length === 0 && jiraConfigAvailable) {
-                      setIsLoadingJiraProjects(true);
-                      setJiraProjectsFetchFailed(false);
-                      try {
-                        const params = new URLSearchParams({ domain: jiraConfig.domain, email: jiraConfig.email, token: jiraToken });
-                        const res = await fetch(`${apiUrl("/api/jira/projects")}?${params}`);
-                        if (res.ok) {
-                          const { projects: list } = await res.json();
-                          setJiraProjects(list);
-                          if (!selectedJiraProjectKey && list.length > 0) setSelectedJiraProjectKey(list[0].key);
-                        } else {
-                          setJiraProjectsFetchFailed(true);
+              <>
+                <div className="px-5 py-4 space-y-4">
+                  {/* Target selector */}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setDeliveryTarget("jira");
+                        setDeliveryErrorMsg(null);
+                        // Auto-fetch projects if not loaded yet
+                        if (jiraProjects.length === 0 && jiraConfigAvailable) {
+                          setIsLoadingJiraProjects(true);
+                          setJiraProjectsFetchFailed(false);
+                          try {
+                            const params = new URLSearchParams({ domain: jiraConfig.domain, email: jiraConfig.email, token: jiraToken });
+                            const res = await fetch(`${apiUrl("/api/jira/projects")}?${params}`);
+                            if (res.ok) {
+                              const { projects: list } = await res.json();
+                              setJiraProjects(list);
+                              if (!selectedJiraProjectKey && list.length > 0) setSelectedJiraProjectKey(list[0].key);
+                            } else {
+                              setJiraProjectsFetchFailed(true);
+                            }
+                          } catch { setJiraProjectsFetchFailed(true); } finally {
+                            setIsLoadingJiraProjects(false);
+                          }
                         }
-                      } catch { setJiraProjectsFetchFailed(true); } finally {
-                        setIsLoadingJiraProjects(false);
-                      }
-                    }
-                  }}
-                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "jira" ? "bg-blue-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
-                >
-                  Jira
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setDeliveryTarget("github");
-                    setDeliveryErrorMsg(null);
-                    if (githubRepos.length === 0 && githubConfigAvailable) {
-                      setIsLoadingGithubRepos(true);
-                      setGithubReposFetchFailed(false);
-                      try {
-                        const params = new URLSearchParams({ token: githubToken });
-                        const res = await fetch(`${apiUrl("/api/github/repos")}?${params}`);
-                        if (res.ok) {
-                          const { repos: list } = await res.json();
-                          setGithubRepos(list);
-                          if (!selectedGithubRepo && list.length > 0) setSelectedGithubRepo(list[0].full_name);
-                        } else { setGithubReposFetchFailed(true); }
-                      } catch { setGithubReposFetchFailed(true); } finally {
-                        setIsLoadingGithubRepos(false);
-                      }
-                    }
-                  }}
-                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "github" ? "bg-zinc-200 text-zinc-950" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
-                >
-                  GitHub
-                </button>
-              </div>
+                      }}
+                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "jira" ? "bg-blue-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
+                    >
+                      Jira
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setDeliveryTarget("github");
+                        setDeliveryErrorMsg(null);
+                        if (githubRepos.length === 0 && githubConfigAvailable) {
+                          setIsLoadingGithubRepos(true);
+                          setGithubReposFetchFailed(false);
+                          try {
+                            const params = new URLSearchParams({ token: githubToken });
+                            const res = await fetch(`${apiUrl("/api/github/repos")}?${params}`);
+                            if (res.ok) {
+                              const { repos: list } = await res.json();
+                              setGithubRepos(list);
+                              if (!selectedGithubRepo && list.length > 0) setSelectedGithubRepo(list[0].full_name);
+                            } else { setGithubReposFetchFailed(true); }
+                          } catch { setGithubReposFetchFailed(true); } finally {
+                            setIsLoadingGithubRepos(false);
+                          }
+                        }
+                      }}
+                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${deliveryTarget === "github" ? "bg-zinc-200 text-zinc-950" : "bg-zinc-900 text-zinc-400 border border-zinc-700 hover:text-zinc-200"}`}
+                    >
+                      GitHub
+                    </button>
+                  </div>
 
-              {/* Configuration status */}
-              {deliveryTarget === "jira" ? (
-                jiraConfigAvailable ? (
-                  <div className="space-y-3">
-                    <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3 space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                        <p className="text-xs font-semibold text-emerald-300">Jira configured</p>
-                      </div>
-                      <p className="text-xs text-zinc-500 font-mono">{jiraConfig.domain || serverConfig?.jira?.domain || "server-configured"}</p>
-                    </div>
-                    {/* Project selector */}
-                    <div>
-                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Project</label>
-                      {isLoadingJiraProjects ? (
-                        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-700 bg-zinc-900">
-                          <Spinner className="w-3.5 h-3.5 text-zinc-500" />
-                          <span className="text-xs text-zinc-500">Loading projects…</span>
-                        </div>
-                      ) : jiraProjects.length > 0 ? (
-                        <div className="relative">
-                          <select
-                            value={selectedJiraProjectKey}
-                            onChange={(e) => setSelectedJiraProjectKey(e.target.value)}
-                            className="w-full appearance-none bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
-                          >
-                            <option value="" disabled>Select a project…</option>
-                            {jiraProjects.map((p) => (
-                              <option key={p.id} value={p.key}>{p.name} ({p.key})</option>
-                            ))}
-                          </select>
-                          <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
-                            <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            </svg>
+                  {/* Configuration status */}
+                  {deliveryTarget === "jira" ? (
+                    jiraConfigAvailable ? (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3 space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                            <p className="text-xs font-semibold text-emerald-300">Jira configured</p>
                           </div>
+                          <p className="text-xs text-zinc-500 font-mono">{jiraConfig.domain || serverConfig?.jira?.domain || "server-configured"}</p>
                         </div>
-                      ) : (
-                        <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 flex items-start gap-2.5">
-                          <svg className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                          </svg>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-amber-300 font-medium">
-                              {jiraProjectsFetchFailed ? "Could not load projects" : "No projects loaded"}
-                            </p>
-                            <p className="text-xs text-zinc-500 mt-0.5">
-                              Go to{" "}
-                              <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
-                                className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
-                                Settings
-                              </Link>
-                              {" "}and use <span className="font-semibold text-zinc-400">Test</span> to verify your credentials.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {/* Create new Jira project */}
-                      {!showCreateNew ? (
-                        <button
-                          type="button"
-                          onClick={() => { setShowCreateNew(true); setCreateNewName(""); setCreateNewKey(""); setCreateNewError(null); }}
-                          className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
-                        >
-                          + Create new project
-                        </button>
-                      ) : (
-                        <div className="mt-2 space-y-2 rounded-lg border border-zinc-700/60 bg-zinc-900/80 p-3">
-                          <p className="text-[11px] font-semibold text-zinc-400">New Jira Project</p>
-                          <input
-                            type="text"
-                            value={createNewName}
-                            onChange={async (e) => {
-                              setCreateNewName(e.target.value);
-                              if (e.target.value.trim()) {
-                                try {
-                                  const r = await fetch(apiUrl(`/api/jira/projects/key-preview?name=${encodeURIComponent(e.target.value)}`));
-                                  if (r.ok) { const d = await r.json(); setCreateNewKey(d.key); }
-                                } catch { /* ignore */ }
-                              }
-                            }}
-                            placeholder="Project name"
-                            className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                          />
-                          <div className="flex gap-2 items-center">
-                            <input
-                              type="text"
-                              value={createNewKey}
-                              onChange={(e) => setCreateNewKey(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 10))}
-                              placeholder="KEY"
-                              className="w-24 bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                            />
-                            <span className="text-[10px] text-zinc-600">Project key (auto-derived)</span>
-                          </div>
-                          {createNewError && (
-                            <p className="text-[11px] text-red-400">{createNewError}</p>
+                        {/* Project selector */}
+                        <div>
+                          <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Project</label>
+                          {isLoadingJiraProjects ? (
+                            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-700 bg-zinc-900">
+                              <Spinner className="w-3.5 h-3.5 text-zinc-500" />
+                              <span className="text-xs text-zinc-500">Loading projects…</span>
+                            </div>
+                          ) : jiraProjects.length > 0 ? (
+                            <div className="relative">
+                              <select
+                                value={selectedJiraProjectKey}
+                                onChange={(e) => setSelectedJiraProjectKey(e.target.value)}
+                                className="w-full appearance-none bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                              >
+                                <option value="" disabled>Select a project…</option>
+                                {jiraProjects.map((p) => (
+                                  <option key={p.id} value={p.key}>{p.name} ({p.key})</option>
+                                ))}
+                              </select>
+                              <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
+                                <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 flex items-start gap-2.5">
+                              <svg className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                              </svg>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs text-amber-300 font-medium">
+                                  {jiraProjectsFetchFailed ? "Could not load projects" : "No projects loaded"}
+                                </p>
+                                <p className="text-xs text-zinc-500 mt-0.5">
+                                  Go to{" "}
+                                  <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
+                                    className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
+                                    Settings
+                                  </Link>
+                                  {" "}and use <span className="font-semibold text-zinc-400">Test</span> to verify your credentials.
+                                </p>
+                              </div>
+                            </div>
                           )}
-                          <div className="flex gap-2 pt-1">
+                          {/* Create new Jira project */}
+                          {!showCreateNew ? (
                             <button
                               type="button"
-                              onClick={async () => {
-                                if (!createNewName.trim()) return;
-                                setIsCreatingNew(true);
-                                setCreateNewError(null);
-                                try {
-                                  const res = await fetch(apiUrl("/api/jira/projects"), {
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({
-                                      domain: jiraConfig.domain,
-                                      email: jiraConfig.email,
-                                      token: jiraToken,
-                                      name: createNewName.trim(),
-                                      key: createNewKey.trim(),
-                                    }),
-                                  });
-                                  if (!res.ok) {
-                                    const e = await res.json().catch(() => ({}));
-                                    throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
+                              onClick={() => { setShowCreateNew(true); setCreateNewName(""); setCreateNewKey(""); setCreateNewError(null); }}
+                              className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                            >
+                              + Create new project
+                            </button>
+                          ) : (
+                            <div className="mt-2 space-y-2 rounded-lg border border-zinc-700/60 bg-zinc-900/80 p-3">
+                              <p className="text-[11px] font-semibold text-zinc-400">New Jira Project</p>
+                              <input
+                                type="text"
+                                value={createNewName}
+                                onChange={async (e) => {
+                                  setCreateNewName(e.target.value);
+                                  if (e.target.value.trim()) {
+                                    try {
+                                      const r = await fetch(apiUrl(`/api/jira/projects/key-preview?name=${encodeURIComponent(e.target.value)}`));
+                                      if (r.ok) { const d = await r.json(); setCreateNewKey(d.key); }
+                                    } catch { /* ignore */ }
                                   }
-                                  const created = await res.json();
-                                  setJiraProjects((prev) => [...prev, created]);
-                                  setSelectedJiraProjectKey(created.key);
-                                  setShowCreateNew(false);
-                                } catch (e: unknown) {
-                                  setCreateNewError(e instanceof Error ? e.message : "Failed to create project");
-                                } finally {
-                                  setIsCreatingNew(false);
-                                }
-                              }}
-                              disabled={isCreatingNew || !createNewName.trim()}
-                              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-semibold transition-colors"
-                            >
-                              {isCreatingNew ? <><Spinner className="w-3 h-3" />Creating…</> : "Create"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setShowCreateNew(false)}
-                              className="px-3 py-1.5 rounded text-[11px] text-zinc-500 hover:text-zinc-200 transition-colors"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 py-3 flex items-start gap-3">
-                    <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-amber-300">Jira not configured</p>
-                      <p className="text-xs text-zinc-500 mt-0.5">
-                        Add your Jira domain, email, token and project key in{" "}
-                        <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
-                          className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
-                          Settings
-                        </Link>
-                        .
-                      </p>
-                    </div>
-                  </div>
-                )
-              ) : (
-                githubConfigAvailable ? (
-                  <div className="space-y-3">
-                    <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                        <p className="text-xs font-semibold text-emerald-300">GitHub configured</p>
-                      </div>
-                    </div>
-                    {/* Repo selector */}
-                    <div>
-                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Repository</label>
-                      {isLoadingGithubRepos ? (
-                        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-700 bg-zinc-900">
-                          <Spinner className="w-3.5 h-3.5 text-zinc-500" />
-                          <span className="text-xs text-zinc-500">Loading repositories…</span>
-                        </div>
-                      ) : githubRepos.length > 0 ? (
-                        <div className="relative">
-                          <select
-                            value={selectedGithubRepo}
-                            onChange={(e) => setSelectedGithubRepo(e.target.value)}
-                            className="w-full appearance-none bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm text-zinc-100 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
-                          >
-                            <option value="" disabled>Select a repository…</option>
-                            {githubRepos.map((r) => (
-                              <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
-                            ))}
-                          </select>
-                          <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
-                            <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            </svg>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 flex items-start gap-2.5">
-                          <svg className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                          </svg>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-amber-300 font-medium">
-                              {githubReposFetchFailed ? "Could not load repositories" : "No repositories loaded"}
-                            </p>
-                            <p className="text-xs text-zinc-500 mt-0.5">
-                              Go to{" "}
-                              <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
-                                className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
-                                Settings
-                              </Link>
-                              {" "}and use <span className="font-semibold text-zinc-400">Test</span> to verify your token.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {/* Create new GitHub repo */}
-                      {!showCreateNew ? (
-                        <button
-                          type="button"
-                          onClick={() => { setShowCreateNew(true); setCreateNewName(""); setCreateNewPrivate(false); setCreateNewError(null); }}
-                          className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
-                        >
-                          + Create new repository
-                        </button>
-                      ) : (
-                        <div className="mt-2 space-y-2 rounded-lg border border-zinc-700/60 bg-zinc-900/80 p-3">
-                          <p className="text-[11px] font-semibold text-zinc-400">New GitHub Repository</p>
-                          <input
-                            type="text"
-                            value={createNewName}
-                            onChange={(e) => setCreateNewName(e.target.value)}
-                            placeholder="repository-name"
-                            className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                          />
-                          <label className="flex items-center gap-2 text-[11px] text-zinc-400 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={createNewPrivate}
-                              onChange={(e) => setCreateNewPrivate(e.target.checked)}
-                              className="rounded border-zinc-600"
-                            />
-                            Private repository
-                          </label>
-                          {createNewError && (
-                            <p className="text-[11px] text-red-400">{createNewError}</p>
+                                }}
+                                placeholder="Project name"
+                                className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                              <div className="flex gap-2 items-center">
+                                <input
+                                  type="text"
+                                  value={createNewKey}
+                                  onChange={(e) => setCreateNewKey(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 10))}
+                                  placeholder="KEY"
+                                  className="w-24 bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                />
+                                <span className="text-[10px] text-zinc-600">Project key (auto-derived)</span>
+                              </div>
+                              {createNewError && (
+                                <p className="text-[11px] text-red-400">{createNewError}</p>
+                              )}
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!createNewName.trim()) return;
+                                    setIsCreatingNew(true);
+                                    setCreateNewError(null);
+                                    try {
+                                      const res = await fetch(apiUrl("/api/jira/projects"), {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          domain: jiraConfig.domain,
+                                          email: jiraConfig.email,
+                                          token: jiraToken,
+                                          name: createNewName.trim(),
+                                          key: createNewKey.trim(),
+                                        }),
+                                      });
+                                      if (!res.ok) {
+                                        const e = await res.json().catch(() => ({}));
+                                        throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
+                                      }
+                                      const created = await res.json();
+                                      setJiraProjects((prev) => [...prev, created]);
+                                      setSelectedJiraProjectKey(created.key);
+                                      setShowCreateNew(false);
+                                    } catch (e: unknown) {
+                                      setCreateNewError(e instanceof Error ? e.message : "Failed to create project");
+                                    } finally {
+                                      setIsCreatingNew(false);
+                                    }
+                                  }}
+                                  disabled={isCreatingNew || !createNewName.trim()}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-semibold transition-colors"
+                                >
+                                  {isCreatingNew ? <><Spinner className="w-3 h-3" />Creating…</> : "Create"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowCreateNew(false)}
+                                  className="px-3 py-1.5 rounded text-[11px] text-zinc-500 hover:text-zinc-200 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
                           )}
-                          <div className="flex gap-2 pt-1">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                if (!createNewName.trim()) return;
-                                setIsCreatingNew(true);
-                                setCreateNewError(null);
-                                try {
-                                  const res = await fetch(apiUrl("/api/github/repos"), {
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({
-                                      token: githubToken,
-                                      name: createNewName.trim(),
-                                      private: createNewPrivate,
-                                    }),
-                                  });
-                                  if (!res.ok) {
-                                    const e = await res.json().catch(() => ({}));
-                                    throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
-                                  }
-                                  const created = await res.json();
-                                  setGithubRepos((prev) => [...prev, created]);
-                                  setSelectedGithubRepo(created.full_name);
-                                  setShowCreateNew(false);
-                                } catch (e: unknown) {
-                                  setCreateNewError(e instanceof Error ? e.message : "Failed to create repository");
-                                } finally {
-                                  setIsCreatingNew(false);
-                                }
-                              }}
-                              disabled={isCreatingNew || !createNewName.trim()}
-                              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-zinc-200 hover:bg-white disabled:opacity-40 text-zinc-950 text-[11px] font-semibold transition-colors"
-                            >
-                              {isCreatingNew ? <><Spinner className="w-3 h-3" />Creating…</> : "Create"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setShowCreateNew(false)}
-                              className="px-3 py-1.5 rounded text-[11px] text-zinc-500 hover:text-zinc-200 transition-colors"
-                            >
-                              Cancel
-                            </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 py-3 flex items-start gap-3">
+                        <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-amber-300">Jira not configured</p>
+                          <p className="text-xs text-zinc-500 mt-0.5">
+                            Add your Jira domain, email, token and project key in{" "}
+                            <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
+                              className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
+                              Settings
+                            </Link>
+                            .
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    githubConfigAvailable ? (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/30 px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                            <p className="text-xs font-semibold text-emerald-300">GitHub configured</p>
                           </div>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 py-3 flex items-start gap-3">
-                    <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-amber-300">GitHub not configured</p>
-                      <p className="text-xs text-zinc-500 mt-0.5">
-                        Add your GitHub token in{" "}
-                        <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
-                          className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
-                          Settings
-                        </Link>
-                        .
-                      </p>
-                    </div>
-                  </div>
-                )
-              )}
+                        {/* Repo selector */}
+                        <div>
+                          <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Repository</label>
+                          {isLoadingGithubRepos ? (
+                            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-700 bg-zinc-900">
+                              <Spinner className="w-3.5 h-3.5 text-zinc-500" />
+                              <span className="text-xs text-zinc-500">Loading repositories…</span>
+                            </div>
+                          ) : githubRepos.length > 0 ? (
+                            <div className="relative">
+                              <select
+                                value={selectedGithubRepo}
+                                onChange={(e) => setSelectedGithubRepo(e.target.value)}
+                                className="w-full appearance-none bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm text-zinc-100 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                              >
+                                <option value="" disabled>Select a repository…</option>
+                                {githubRepos.map((r) => (
+                                  <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+                                ))}
+                              </select>
+                              <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
+                                <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 flex items-start gap-2.5">
+                              <svg className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                              </svg>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs text-amber-300 font-medium">
+                                  {githubReposFetchFailed ? "Could not load repositories" : "No repositories loaded"}
+                                </p>
+                                <p className="text-xs text-zinc-500 mt-0.5">
+                                  Go to{" "}
+                                  <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
+                                    className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
+                                    Settings
+                                  </Link>
+                                  {" "}and use <span className="font-semibold text-zinc-400">Test</span> to verify your token.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          {/* Create new GitHub repo */}
+                          {!showCreateNew ? (
+                            <button
+                              type="button"
+                              onClick={() => { setShowCreateNew(true); setCreateNewName(""); setCreateNewPrivate(false); setCreateNewError(null); }}
+                              className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                            >
+                              + Create new repository
+                            </button>
+                          ) : (
+                            <div className="mt-2 space-y-2 rounded-lg border border-zinc-700/60 bg-zinc-900/80 p-3">
+                              <p className="text-[11px] font-semibold text-zinc-400">New GitHub Repository</p>
+                              <input
+                                type="text"
+                                value={createNewName}
+                                onChange={(e) => setCreateNewName(e.target.value)}
+                                placeholder="repository-name"
+                                className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                              <label className="flex items-center gap-2 text-[11px] text-zinc-400 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={createNewPrivate}
+                                  onChange={(e) => setCreateNewPrivate(e.target.checked)}
+                                  className="rounded border-zinc-600"
+                                />
+                                Private repository
+                              </label>
+                              {createNewError && (
+                                <p className="text-[11px] text-red-400">{createNewError}</p>
+                              )}
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!createNewName.trim()) return;
+                                    setIsCreatingNew(true);
+                                    setCreateNewError(null);
+                                    try {
+                                      const res = await fetch(apiUrl("/api/github/repos"), {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          token: githubToken,
+                                          name: createNewName.trim(),
+                                          private: createNewPrivate,
+                                        }),
+                                      });
+                                      if (!res.ok) {
+                                        const e = await res.json().catch(() => ({}));
+                                        throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
+                                      }
+                                      const created = await res.json();
+                                      setGithubRepos((prev) => [...prev, created]);
+                                      setSelectedGithubRepo(created.full_name);
+                                      setShowCreateNew(false);
+                                    } catch (e: unknown) {
+                                      setCreateNewError(e instanceof Error ? e.message : "Failed to create repository");
+                                    } finally {
+                                      setIsCreatingNew(false);
+                                    }
+                                  }}
+                                  disabled={isCreatingNew || !createNewName.trim()}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-zinc-200 hover:bg-white disabled:opacity-40 text-zinc-950 text-[11px] font-semibold transition-colors"
+                                >
+                                  {isCreatingNew ? <><Spinner className="w-3 h-3" />Creating…</> : "Create"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowCreateNew(false)}
+                                  className="px-3 py-1.5 rounded text-[11px] text-zinc-500 hover:text-zinc-200 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 py-3 flex items-start gap-3">
+                        <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-amber-300">GitHub not configured</p>
+                          <p className="text-xs text-zinc-500 mt-0.5">
+                            Add your GitHub token in{" "}
+                            <Link href={settingsHref} onClick={() => setShowDeliveryModal(false)}
+                              className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
+                              Settings
+                            </Link>
+                            .
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  )}
 
-              {deliveryErrorMsg && (
-                <div className="flex items-start gap-2 bg-red-950/50 border border-red-800/50 rounded-lg px-3 py-2.5 text-xs text-red-300">
-                  <span className="shrink-0 mt-0.5">⚠</span>
-                  <span className="flex-1 break-words">{deliveryErrorMsg}</span>
+                  {deliveryErrorMsg && (
+                    <div className="flex items-start gap-2 bg-red-950/50 border border-red-800/50 rounded-lg px-3 py-2.5 text-xs text-red-300">
+                      <span className="shrink-0 mt-0.5">⚠</span>
+                      <span className="flex-1 break-words">{deliveryErrorMsg}</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            <div className="px-5 py-4 border-t border-zinc-700/60 bg-zinc-900/50 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowDeliveryModal(false)}
-                className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-700/50 hover:bg-zinc-700 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handlePreviewDelivery}
-                disabled={
-                  isLoadingPreview ||
-                  (deliveryTarget === "jira" && (
-                    !jiraConfigAvailable ||
-                    isLoadingJiraProjects ||
-                    jiraProjects.length === 0 ||
-                    !selectedJiraProjectKey
-                  )) ||
-                  (deliveryTarget === "github" && (
-                    !githubConfigAvailable ||
-                    isLoadingGithubRepos ||
-                    githubRepos.length === 0 ||
-                    !selectedGithubRepo
-                  ))
-                }
-                className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"
-              >
-                {isLoadingPreview ? (
-                  <><Spinner className="w-3.5 h-3.5" />Loading…</>
-                ) : (
-                  <>
-                    Preview
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </>
-                )}
-              </button>
-            </div>
-            </>
+                <div className="px-5 py-4 border-t border-zinc-700/60 bg-zinc-900/50 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeliveryModal(false)}
+                    className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-700/50 hover:bg-zinc-700 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePreviewDelivery}
+                    disabled={
+                      isLoadingPreview ||
+                      (deliveryTarget === "jira" && (
+                        !jiraConfigAvailable ||
+                        isLoadingJiraProjects ||
+                        jiraProjects.length === 0 ||
+                        !selectedJiraProjectKey
+                      )) ||
+                      (deliveryTarget === "github" && (
+                        !githubConfigAvailable ||
+                        isLoadingGithubRepos ||
+                        githubRepos.length === 0 ||
+                        !selectedGithubRepo
+                      ))
+                    }
+                    className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-all shadow-md shadow-blue-900/30"
+                  >
+                    {isLoadingPreview ? (
+                      <><Spinner className="w-3.5 h-3.5" />Loading…</>
+                    ) : (
+                      <>
+                        Preview
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>

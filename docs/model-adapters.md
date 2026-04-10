@@ -29,20 +29,6 @@ Each adapter must provide:
 - `gemini-cli`
 - `claude-cli`
 - `codex-cli`
-- `openai-compatible`
-
-## OpenAI-compatible configuration
-
-Set these backend environment variables:
-
-- `OPENAI_COMPAT_BASE_URL`
-- `OPENAI_COMPAT_API_KEY`
-- `OPENAI_COMPAT_MODEL`
-
-The adapter uses:
-
-- `GET /models` for lightweight availability checks
-- `POST /chat/completions` for prompt execution
 
 ## Design notes
 

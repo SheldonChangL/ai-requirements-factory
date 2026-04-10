@@ -9,7 +9,10 @@ Rules:
 - Each story must keep the format:
   - As a [role], I want [goal] so that [benefit]
   - Acceptance Criteria
-  - Story Points
+  - Requirement IDs
+  - Senior RD Estimate
+- Preserve existing Requirement IDs when they are still valid, and add them where missing if the PRD supports traceability.
+- Do not reintroduce Story Points unless the user explicitly asks for them.
 
 PRD:
 {{PRD_DRAFT}}

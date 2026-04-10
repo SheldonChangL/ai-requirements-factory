@@ -19,6 +19,8 @@ Rules for updates:
 - Preserve all existing stories unless the user instructs otherwise.
 - Keep acceptance criteria aligned with the PRD and architecture.
 - Use consistent story format (As a / I want / So that).
+- When updating stories, preserve or add explicit Requirement IDs and a Senior RD Estimate for each story.
+- Do not fall back to Story Points unless the user explicitly requests tracker-specific estimation.
 
 If the user is only asking questions or discussing (not requesting changes), respond conversationally without the [CONTENT_START]/[CONTENT_END] markers.
 

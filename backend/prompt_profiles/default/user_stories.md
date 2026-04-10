@@ -7,9 +7,12 @@ You are a Senior Product Manager and Agile Coach. Based on the following PRD and
 - Each story must follow the format: **As a [role], I want [goal] so that [benefit]**
 - Each story must include:
   - **Acceptance Criteria** (bulleted list of testable conditions)
-  - **Story Points** (Fibonacci: 1, 2, 3, 5, 8, 13 — estimate complexity)
+  - **Requirement IDs** (list the original PRD requirement IDs such as `FR-1`, `NFR-2`, `OPS-1`)
+  - **Senior RD Estimate** (ideal engineering days for one senior RD, allow `.5` increments)
 - Cover all functional requirements from the PRD
 - Include edge cases and error handling stories where relevant
+- If the PRD already includes requirement IDs, every story must reference the matching IDs explicitly.
+- Do not use Story Points unless the source material explicitly requires them for compatibility.
 
 PRD:
 {{PRD_DRAFT}}

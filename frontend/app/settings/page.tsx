@@ -25,11 +25,19 @@ const API_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "/api").replace(/\/$/, "")
 
 function apiUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  if (!API_BASE) return normalizedPath;
-  if (API_BASE.endsWith("/api") && normalizedPath.startsWith("/api/")) {
-    return `${API_BASE}${normalizedPath.slice(4)}`;
+  const isBrowser = typeof window !== "undefined";
+  const isLocalBrowser =
+    isBrowser &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  const effectiveApiBase =
+    isLocalBrowser && (API_BASE === "/api" || API_BASE === "")
+      ? `${window.location.protocol}//${window.location.hostname}:8000`
+      : API_BASE;
+  if (!effectiveApiBase) return normalizedPath;
+  if (effectiveApiBase.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${effectiveApiBase}${normalizedPath.slice(4)}`;
   }
-  return `${API_BASE}${normalizedPath}`;
+  return `${effectiveApiBase}${normalizedPath}`;
 }
 
 function Spinner({ className = "w-4 h-4" }: { className?: string }) {
@@ -141,9 +149,9 @@ const INTEGRATIONS: IntegrationDef[] = [
   {
     id: "export",
     name: "Export to file",
-    tagline: "Download stories as Markdown, CSV or JSON",
-    available: false,
-    isConfigured: () => false,
+    tagline: "Download a polished Excel planning workbook with traceability and schedule views",
+    available: true,
+    isConfigured: () => true,
     icon: <ExportIcon className="w-6 h-6 text-white" />,
     accentFrom: "from-emerald-600",
     accentTo: "to-teal-800",
@@ -516,6 +524,23 @@ function ConfigPanel({
       <div className="px-5 py-5">
         {def.id === "jira"   && <JiraPanel   onSaved={onSaved} />}
         {def.id === "github" && <GitHubPanel onSaved={onSaved} />}
+        {def.id === "export" && <ExportPanel />}
+      </div>
+    </div>
+  );
+}
+
+function ExportPanel() {
+  return (
+    <div className="space-y-4 text-sm text-zinc-300">
+      <div className="rounded-xl border border-emerald-700/30 bg-emerald-950/20 px-4 py-3">
+        <p className="font-semibold text-emerald-300">No credentials required</p>
+        <p className="mt-1 text-xs leading-5 text-zinc-400">
+          The Excel planning export is available directly from the User Stories workspace. It downloads a workbook with overview, prioritised tasks, requirement traceability, and a Gantt-style schedule.
+        </p>
+      </div>
+      <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 px-4 py-3 text-xs leading-5 text-zinc-500">
+        Use the <span className="font-semibold text-zinc-300">Download Excel Plan</span> action after generating user stories. For the best traceability results, regenerate or refine the PRD and User Stories so Requirement IDs and Senior RD estimates are present in the latest draft.
       </div>
     </div>
   );

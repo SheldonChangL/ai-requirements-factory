@@ -16,6 +16,44 @@ except ModuleNotFoundError:
 PROMPT_PROFILE = os.getenv("PROMPT_PROFILE", "default").strip() or "default"
 PROMPT_PROFILE_DIR = os.getenv("PROMPT_PROFILE_DIR", "").strip()
 DEFAULT_PROMPT_PROFILE_DIR = Path(__file__).resolve().parent / "prompt_profiles" / PROMPT_PROFILE
+SA_OUTPUT_PROTOCOL = """
+## Response Protocol
+You must return exactly one of these outcomes:
+1. Clarification required:
+   - If there are 2 or more unanswered questions, return only a fenced `json-questionnaire` block.
+   - If there is exactly 1 unanswered question, return only that one question in plain text.
+2. Requirements complete:
+   - Return only the complete PRD in the required format.
+   - Append `[PRD_READY]` as the final token.
+
+Forbidden output:
+- summaries
+- bullet-point recaps
+- spreadsheet or table suggestions
+- "next step" offers
+- implementation plans
+- any commentary before or after the questionnaire or PRD
+""".strip()
+
+CLI_SA_SYSTEM_PROMPT = """
+You are a System Analyst. Respond in the same language as the user.
+
+Your job is to turn rough requirements into a PRD.
+
+If information is missing:
+- ask only the minimum precise questions
+- make sure to cover missing NFRs such as security, performance, scalability/concurrency, availability/reliability, and compliance/data retention
+
+Output rules:
+- if 2 or more questions are needed, output only a fenced `json-questionnaire` block with `title` and `questions`, and each question must include `id`, `category`, and `question`
+- if exactly 1 question is needed, output only that question
+- if requirements are complete, output only the PRD, include: Overview, Goals & Objectives, Functional Requirements, Non-Functional Requirements, Operational / Safety Requirements, Out of Scope, Open Questions, and append `[PRD_READY]` at the very end
+- every requirement in Functional Requirements must use IDs like `FR-1`
+- every requirement in Non-Functional Requirements must use IDs like `NFR-1`
+- operational, rollout, validation, and failure-handling items must use IDs like `OPS-1`
+
+Do not add summaries, next steps, implementation plans, or commentary outside the questionnaire or PRD.
+""".strip()
 
 
 def _active_prompt_dir() -> Path:
@@ -51,6 +89,10 @@ def _budget(model_choice: str):
     )
 
 
+def _is_cli_model(model_choice: str) -> bool:
+    return model_choice.strip().lower() in {"gemini-cli", "claude-cli", "codex-cli"}
+
+
 def build_sa_prompt(
     *,
     model_choice: str,
@@ -59,7 +101,18 @@ def build_sa_prompt(
     already_ready: bool,
 ) -> str:
     budget = _budget(model_choice)
-    sa_system = _load_prompt_template("sa_system.md")
+    if _is_cli_model(model_choice):
+        compacted_conversation = compact_conversation(
+            conversation_text,
+            token_budget=max(int(budget.prompt_tokens * 0.32), 500),
+        ).text
+        return (
+            f"{CLI_SA_SYSTEM_PROMPT}\n\n"
+            f"Conversation:\n{compacted_conversation}\n\n"
+            "Reply with only the questionnaire, one question, or the PRD."
+        )
+    else:
+        sa_system = f"{_load_prompt_template('sa_system.md')}\n\n{SA_OUTPUT_PROTOCOL}"
     if already_ready and existing_prd.strip():
         current_prd = compact_markdown(
             existing_prd,

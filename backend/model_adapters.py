@@ -10,17 +10,20 @@ Adapter contract:
 
 from __future__ import annotations
 
-import json
 import os
+import re
+import shlex
 import subprocess
 import tempfile
-import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from langchain_ollama import ChatOllama
+
+
+ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\].*?(?:\x07|\x1b\\))")
 
 
 def _load_env_file() -> None:
@@ -42,11 +45,23 @@ def _load_env_file() -> None:
 
 _load_env_file()
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-OPENAI_COMPAT_BASE_URL = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-OPENAI_COMPAT_API_KEY = os.getenv("OPENAI_COMPAT_API_KEY", "").strip()
-OPENAI_COMPAT_MODEL = os.getenv("OPENAI_COMPAT_MODEL", "").strip()
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+GEMINI_CLI_TIMEOUT_SECONDS = _env_int("GEMINI_CLI_TIMEOUT_SECONDS", 360)
+CLAUDE_CLI_TIMEOUT_SECONDS = _env_int("CLAUDE_CLI_TIMEOUT_SECONDS", 360)
+CODEX_CLI_TIMEOUT_SECONDS = _env_int("CODEX_CLI_TIMEOUT_SECONDS", 360)
 
 
 @dataclass(frozen=True)
@@ -70,30 +85,75 @@ def _invoke_ollama(prompt: str) -> str:
     return response.content
 
 
-def _invoke_cli(prompt: str, command: str, display_name: str) -> str:
+def _clean_cli_output(output: str) -> str:
+    cleaned = output.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = ANSI_ESCAPE_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
+def _runtime_env_for_cli(command: str) -> dict[str, str]:
+    env = os.environ.copy()
+    if command == "claude" and not env.get("SSH_AUTH_SOCK"):
+        try:
+            result = subprocess.run(
+                ["launchctl", "getenv", "SSH_AUTH_SOCK"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                input="",
+            )
+            sock = result.stdout.strip()
+            if result.returncode == 0 and sock:
+                env["SSH_AUTH_SOCK"] = sock
+        except Exception:
+            pass
+    return env
+
+
+def _invoke_cli(
+    prompt: str,
+    command: str,
+    display_name: str,
+    timeout_seconds: int,
+    extra_args: list[str] | None = None,
+    use_login_shell: bool = False,
+) -> str:
+    command_argv = [command, *(extra_args or []), "-p", prompt]
+    argv = command_argv
+    if use_login_shell:
+        shell_path = os.getenv("SHELL", "/bin/zsh")
+        argv = [shell_path, "-lc", " ".join(shlex.quote(arg) for arg in command_argv)]
     try:
         result = subprocess.run(
-            [command, "-p", prompt],
+            argv,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout_seconds,
             input="",
+            env=_runtime_env_for_cli(command),
         )
         if result.returncode != 0:
-            stderr_msg = result.stderr.strip() or "unknown error"
+            stderr_msg = result.stderr.strip()
+            stdout_msg = result.stdout.strip()
+            detail = stderr_msg or stdout_msg or "unknown error"
+            if command == "claude" and "Not logged in" in detail:
+                detail = (
+                    f"{detail}. Run `claude auth login` in the same host account "
+                    "that starts the backend, then restart the backend."
+                )
             raise RuntimeError(
-                f"{display_name} exited with code {result.returncode}: {stderr_msg}"
+                f"{display_name} exited with code {result.returncode}: {detail}"
             )
         output = result.stdout.strip()
         if not output:
             raise RuntimeError(f"{display_name} returned empty output.")
-        return output
+        return _clean_cli_output(output)
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"{display_name} not found. Install it and ensure it is on your PATH."
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"{display_name} timed out after 120 seconds.") from exc
+        raise RuntimeError(f"{display_name} timed out after {timeout_seconds} seconds.") from exc
 
 
 def _invoke_codex_cli(prompt: str) -> str:
@@ -115,7 +175,7 @@ def _invoke_codex_cli(prompt: str) -> str:
             ],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=CODEX_CLI_TIMEOUT_SECONDS,
             input="",
         )
         if result.returncode != 0:
@@ -132,7 +192,9 @@ def _invoke_codex_cli(prompt: str) -> str:
             "codex CLI not found. Install it and ensure it is on your PATH."
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("codex CLI timed out after 180 seconds.") from exc
+        raise RuntimeError(
+            f"codex CLI timed out after {CODEX_CLI_TIMEOUT_SECONDS} seconds."
+        ) from exc
     finally:
         if output_path:
             try:
@@ -162,81 +224,23 @@ def _check_cli(command: str) -> bool:
         return False
 
 
-def _openai_compat_headers() -> dict[str, str]:
-    if not OPENAI_COMPAT_API_KEY:
-        raise RuntimeError("OPENAI_COMPAT_API_KEY is not set.")
-    return {
-        "Authorization": f"Bearer {OPENAI_COMPAT_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-
-def _extract_openai_compat_content(payload: dict) -> str:
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("OpenAI-compatible API returned no choices.")
-    message = choices[0].get("message", {})
-    content = message.get("content", "")
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        text_parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = item.get("text", "")
-                if isinstance(text, str):
-                    text_parts.append(text)
-        joined = "".join(text_parts).strip()
-        if joined:
-            return joined
-    raise RuntimeError("OpenAI-compatible API returned unsupported message content.")
-
-
-def _invoke_openai_compatible(prompt: str) -> str:
-    if not OPENAI_COMPAT_MODEL:
-        raise RuntimeError("OPENAI_COMPAT_MODEL is not set.")
-
-    payload = {
-        "model": OPENAI_COMPAT_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-    }
-    request = urllib.request.Request(
-        f"{OPENAI_COMPAT_BASE_URL}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers=_openai_compat_headers(),
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            body = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"OpenAI-compatible API error (HTTP {exc.code}): {error_body}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(
-            f"Could not reach OpenAI-compatible API at '{OPENAI_COMPAT_BASE_URL}': {exc.reason}"
-        ) from exc
-
-    output = _extract_openai_compat_content(body)
-    if not output:
-        raise RuntimeError("OpenAI-compatible API returned empty output.")
-    return output
-
-
-def _check_openai_compatible() -> bool:
-    if not OPENAI_COMPAT_API_KEY:
+def _check_claude_cli() -> bool:
+    if not _check_cli("claude"):
         return False
-    request = urllib.request.Request(
-        f"{OPENAI_COMPAT_BASE_URL}/models",
-        headers=_openai_compat_headers(),
-    )
+
+    if ANTHROPIC_API_KEY:
+        return True
+
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return response.status == 200
+        result = subprocess.run(
+            ["claude", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            input="",
+            env=_runtime_env_for_cli("claude"),
+        )
+        return result.returncode == 0 and '"loggedIn": true' in result.stdout
     except Exception:
         return False
 
@@ -253,7 +257,12 @@ MODEL_ADAPTERS: dict[str, ModelAdapter] = {
     ),
     "gemini-cli": ModelAdapter(
         model_choice="gemini-cli",
-        invoke=lambda prompt: _invoke_cli(prompt, "gemini", "gemini CLI"),
+        invoke=lambda prompt: _invoke_cli(
+            prompt,
+            "gemini",
+            "gemini CLI",
+            GEMINI_CLI_TIMEOUT_SECONDS,
+        ),
         is_available=lambda: _check_cli("gemini"),
         description="Gemini CLI subprocess adapter",
         max_context_tokens=32768,
@@ -262,8 +271,15 @@ MODEL_ADAPTERS: dict[str, ModelAdapter] = {
     ),
     "claude-cli": ModelAdapter(
         model_choice="claude-cli",
-        invoke=lambda prompt: _invoke_cli(prompt, "claude", "claude CLI"),
-        is_available=lambda: _check_cli("claude"),
+        invoke=lambda prompt: _invoke_cli(
+            prompt,
+            "claude",
+            "claude CLI",
+            CLAUDE_CLI_TIMEOUT_SECONDS,
+            ["--bare"] if ANTHROPIC_API_KEY else None,
+            use_login_shell=not ANTHROPIC_API_KEY,
+        ),
+        is_available=_check_claude_cli,
         description="Claude CLI subprocess adapter",
         max_context_tokens=200000,
         prompt_budget_tokens=140000,
@@ -274,15 +290,6 @@ MODEL_ADAPTERS: dict[str, ModelAdapter] = {
         invoke=_invoke_codex_cli,
         is_available=lambda: _check_cli("codex"),
         description="Codex CLI subprocess adapter",
-        max_context_tokens=128000,
-        prompt_budget_tokens=90000,
-        response_budget_tokens=4000,
-    ),
-    "openai-compatible": ModelAdapter(
-        model_choice="openai-compatible",
-        invoke=_invoke_openai_compatible,
-        is_available=_check_openai_compatible,
-        description="OpenAI-compatible chat completions adapter",
         max_context_tokens=128000,
         prompt_budget_tokens=90000,
         response_budget_tokens=4000,

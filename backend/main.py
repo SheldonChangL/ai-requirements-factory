@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import re
 import sqlite3
 import urllib.error
 from pathlib import Path
@@ -12,7 +13,7 @@ import openpyxl
 from docx import Document as DocxDocument
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
@@ -46,6 +47,7 @@ try:
         export_project_json,
         export_project_markdown,
     )
+    from exports_excel import generate_delivery_excel
     from integrations.jira import list_jira_projects, create_jira_project, _derive_project_key
     from integrations.github import list_github_repos, create_github_repo
     from integrations.registry_map import DELIVERY_INTEGRATIONS
@@ -85,11 +87,26 @@ except ModuleNotFoundError:
     )
     from backend.workflow import parse_delivery_items, project_artifacts_from_state
 
-CORS_ALLOW_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
-    if origin.strip()
-]
+def _expand_cors_origins(raw_origins: str) -> list[str]:
+    expanded: list[str] = []
+    for origin in raw_origins.split(","):
+        item = origin.strip()
+        if not item:
+            continue
+        if item not in expanded:
+            expanded.append(item)
+        if item.startswith("http://localhost:"):
+            alt = item.replace("http://localhost:", "http://127.0.0.1:", 1)
+            if alt not in expanded:
+                expanded.append(alt)
+        elif item.startswith("http://127.0.0.1:"):
+            alt = item.replace("http://127.0.0.1:", "http://localhost:", 1)
+            if alt not in expanded:
+                expanded.append(alt)
+    return expanded
+
+
+CORS_ALLOW_ORIGINS = _expand_cors_origins(os.getenv("CORS_ALLOW_ORIGINS", "*"))
 
 # ---------------------------------------------------------------------------
 # Host-level integration credentials (optional — users can override in UI)
@@ -542,6 +559,37 @@ def _extract_stage_content(response_text: str) -> "tuple[str, Optional[str]]":
     return response_text, None
 
 
+PRD_SECTION_PATTERNS = (
+    r"(?im)^#\s*(product requirements document|prd|產品需求文件|產品需求文檔|產品需求說明書)\b",
+    r"(?im)^##\s*(1\.\s*)?(overview|概述|概覽|總覽)\b",
+    r"(?im)^##\s*(2\.\s*)?(goals?(?:\s*&\s*objectives)?|目標(?:與目的)?)\b",
+    r"(?im)^##\s*(3\.\s*)?(functional requirements|功能需求)\b",
+    r"(?im)^##\s*(4\.\s*)?(non-functional requirements|非功能需求)\b",
+    r"(?im)^##\s*(5\.\s*)?(out of scope|不在範圍|範圍外)\b",
+    r"(?im)^##\s*(6\.\s*)?(open questions|未決問題|開放問題|待確認事項)\b",
+)
+
+
+def _looks_like_complete_prd(response_text: str) -> bool:
+    text = response_text.strip()
+    if not text or "```json-questionnaire" in text:
+        return False
+    matches = sum(1 for pattern in PRD_SECTION_PATTERNS if re.search(pattern, text))
+    return matches >= 4
+
+
+def _extract_prd_state_from_sa_response(
+    response_text: str,
+    existing_prd: str,
+    existing_ready: bool,
+) -> tuple[str, bool]:
+    if "[PRD_READY]" in response_text:
+        return response_text.replace("[PRD_READY]", "").rstrip(), True
+    if _looks_like_complete_prd(response_text):
+        return response_text.rstrip(), True
+    return existing_prd, existing_ready
+
+
 # ---------------------------------------------------------------------------
 # SA Interaction Node
 # ---------------------------------------------------------------------------
@@ -595,9 +643,11 @@ def sa_interaction_node(state: SAState) -> SAState:
     prd_draft = state.get("prd_draft", "")
     is_ready = state.get("is_ready_for_architecture", False)
 
-    if "[PRD_READY]" in response_text:
-        is_ready = True
-        prd_draft = response_text.replace("[PRD_READY]", "").rstrip()
+    prd_draft, is_ready = _extract_prd_state_from_sa_response(
+        response_text,
+        prd_draft,
+        is_ready,
+    )
 
     return {
         "messages": [AIMessage(content=response_text)],
@@ -730,9 +780,22 @@ def require_architecture(thread_id: str) -> str:
 
 
 def parse_delivery_items_or_raise(thread_id: str, model_choice: str):
-    user_stories_draft = require_user_stories(thread_id)
+    artifacts = get_project_artifacts(thread_id)
+    user_stories_draft = artifacts.user_stories
+    if not user_stories_draft:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "missing_user_stories",
+                "User stories must be generated before using delivery integrations.",
+            ),
+        )
     try:
-        return parse_delivery_items(user_stories_draft, model_choice)
+        return parse_delivery_items(
+            user_stories_draft,
+            model_choice,
+            artifacts.prd,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
@@ -1898,6 +1961,45 @@ async def publish_delivery(request: DeliveryPublishRequest):
         created_items=all_created,
         count=len(all_created),
         results=per_target_results,
+    )
+
+
+@app.get("/api/delivery/export/excel/{thread_id}")
+async def export_delivery_excel(thread_id: str, model_choice: str = "ollama"):
+    """
+    Generate and return a prioritised Excel workbook for delivery items.
+    """
+    # 1. Verify project exists and get its name
+    row = conn.execute("SELECT name FROM projects WHERE thread_id=?", (thread_id,)).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("project_not_found", f"Project '{thread_id}' not found."),
+        )
+    project_name = row[0]
+
+    # 2. Parse delivery items (requires user stories to exist)
+    model_choice = validate_model_choice(model_choice)
+    items = parse_delivery_items_or_raise(thread_id, model_choice)
+
+    # 3. Generate workbook
+    try:
+        output = await asyncio.to_thread(generate_delivery_excel, project_name, items)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("export_error", f"Failed to generate Excel workbook: {exc}"),
+        )
+
+    filename = f"delivery_plan_{thread_id[:8]}.xlsx"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Access-Control-Expose-Headers": "Content-Disposition",
+    }
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
     )
 
 

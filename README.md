@@ -110,7 +110,7 @@ Browser (Next.js)
 
 - Python 3.11+
 - Node.js 18+
-- At least one model backend available on the host: Ollama, Gemini CLI, Claude CLI, Codex CLI, or an OpenAI-compatible API
+- At least one model backend available on the host: Ollama, Gemini CLI, Claude CLI, or Codex CLI
 
 Node.js 20 LTS is the recommended runtime. Node 22 may print a harmless `DEP0060` warning in Next.js dev proxy mode.
 
@@ -171,6 +171,8 @@ Why this works:
 
 This also fixes a common symptom where model selection appears broken on another device. In that case the frontend is usually trying to call `http://localhost:8000` from the remote browser, which points to the remote device itself instead of the machine running the backend.
 
+When you open the app locally via `localhost:3000` or `127.0.0.1:3000`, the frontend bypasses the Next.js dev proxy and calls the backend directly on port `8000`. This avoids long-running CLI requests failing with `socket hang up` in Next dev mode.
+
 If you intentionally want the browser to call the backend directly, set `NEXT_PUBLIC_API_BASE` to a full URL such as `http://192.168.1.50:8000` and update backend CORS accordingly.
 
 Important:
@@ -187,11 +189,9 @@ See `backend/.env.example`.
 - `OLLAMA_HOST`: Ollama base URL
 - `OLLAMA_MODEL`: default Ollama model name
 - `CORS_ALLOW_ORIGINS`: comma-separated list of allowed origins
+- `GEMINI_CLI_TIMEOUT_SECONDS`, `CLAUDE_CLI_TIMEOUT_SECONDS`, `CODEX_CLI_TIMEOUT_SECONDS`: backend-side request timeouts for CLI backends. The defaults are tuned for this app's larger staged prompts; raise them further only if your host can tolerate longer-running CLI requests.
 - `PROMPT_PROFILE`: prompt profile name under `backend/prompt_profiles/`
 - `PROMPT_PROFILE_DIR`: optional absolute path to a custom prompt directory
-- `OPENAI_COMPAT_BASE_URL`: base URL for OpenAI-compatible API providers
-- `OPENAI_COMPAT_API_KEY`: API key for the OpenAI-compatible provider
-- `OPENAI_COMPAT_MODEL`: model name for the OpenAI-compatible provider
 
 ### Frontend environment variables
 
@@ -199,6 +199,7 @@ See `frontend/.env.example`.
 
 - `NEXT_PUBLIC_API_BASE`: public API base used by the browser. Recommended default is `/api` so Next.js can proxy requests.
 - `BACKEND_INTERNAL_BASE`: backend origin used by the Next.js server-side proxy. Typically `http://127.0.0.1:8000`.
+- `ANTHROPIC_API_KEY`: optional but recommended if you want `claude-cli` to work reliably from a background self-hosted server. When set, the adapter uses `claude --bare -p ...` instead of relying on an interactive login session.
 - `NEXT_PUBLIC_DEFAULT_JIRA_DOMAIN`: optional default Jira domain for your team
 
 ## Supported inputs
@@ -215,7 +216,6 @@ See `frontend/.env.example`.
 - Gemini CLI
 - Claude CLI
 - Codex CLI
-- OpenAI-compatible APIs
 
 ## Context budget management
 

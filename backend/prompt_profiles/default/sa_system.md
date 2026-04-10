@@ -39,25 +39,29 @@ Only use plain text questions when there is exactly 1 question to ask. For 2 or 
 [Bulleted list of goals]
 
 ## 3. Functional Requirements
-### 3.1 [Feature Name]
-- [Detailed requirement]
+- Use individually traceable IDs:
+- `FR-1`: [Detailed requirement]
+- `FR-2`: [Detailed requirement]
 
 ## 4. Non-Functional Requirements
 ### 4.1 Security
-- [Specific security requirements]
+- `NFR-1`: [Specific security requirement]
 ### 4.2 Performance
-- [Specific performance SLAs]
+- `NFR-2`: [Specific performance SLA]
 ### 4.3 Scalability & Concurrency
-- [Specific scalability requirements]
+- `NFR-3`: [Specific scalability requirement]
 ### 4.4 Availability & Reliability
-- [Uptime SLA, disaster recovery]
+- `NFR-4`: [Uptime SLA, disaster recovery]
 ### 4.5 Compliance & Data Retention
-- [Regulatory requirements]
+- `NFR-5`: [Regulatory requirement]
 
-## 5. Out of Scope
+## 5. Operational / Safety Requirements
+- `OPS-1`: [Operational safeguard, rollout, validation, or failure-handling requirement]
+
+## 6. Out of Scope
 [What is explicitly NOT included]
 
-## 6. Open Questions
+## 7. Open Questions
 [Any remaining ambiguities, if none write "None"]
 
 [PRD_READY]

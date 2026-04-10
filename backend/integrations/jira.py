@@ -91,6 +91,8 @@ def preview_jira(items: list[DeliveryItem], config: dict[str, str]) -> list[dict
                 "issue_type": "Story",
                 "group": item.group,
                 "estimate": item.estimate,
+                "senior_rd_days": item.senior_rd_days,
+                "requirement_refs": item.requirement_refs,
             }
         )
     return preview
@@ -109,10 +111,13 @@ def publish_jira(items: list[DeliveryItem], config: dict[str, str]) -> DeliveryP
     created: list[str] = []
 
     for item in items:
+        requirement_refs = ", ".join(item.requirement_refs) if item.requirement_refs else "unmapped"
         description_text = (
             f"{item.body}\n\n"
             f"Group: {item.group}\n"
-            f"Story Points: {item.estimate}\n"
+            f"Senior RD Estimate: {item.senior_rd_days:g} ideal engineering days\n"
+            f"Requirement IDs: {requirement_refs}\n"
+            f"Tracker Estimate: {item.estimate} pts\n"
             f"Labels: {', '.join(item.labels)}"
         )
         payload = {

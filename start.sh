@@ -142,7 +142,15 @@ section "Starting Backend (FastAPI on :8000)"
 truncate -s 0 "$BACKEND_LOG"
 
 cd "$BACKEND_DIR"
-nohup "$PYTHON_BIN" -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload \
+BACKEND_RELOAD="${BACKEND_RELOAD:-0}"
+UVICORN_ARGS=(main:app --host 0.0.0.0 --port 8000)
+if [ "$BACKEND_RELOAD" = "1" ]; then
+  UVICORN_ARGS+=(--reload)
+  warn "Backend reload mode enabled via BACKEND_RELOAD=1. Claude CLI local auth may fail in reload worker mode."
+else
+  info "Backend reload disabled by default so local CLI auth works reliably."
+fi
+nohup "$PYTHON_BIN" -m uvicorn "${UVICORN_ARGS[@]}" \
   < /dev/null > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 disown "$BACKEND_PID" 2>/dev/null || true
